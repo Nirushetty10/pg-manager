@@ -1306,7 +1306,7 @@ export default function TenantsPage() {
                         <StatusChip status={t.status} />
                       </TableCell>
                       <TableCell>
-                        {t.payment_status && (
+                        {t.payment_status && t.status !== "vacated" && (
                           <Chip
                             label={t.payment_status?.toUpperCase()}
                             size="small"
@@ -1779,6 +1779,7 @@ export default function TenantsPage() {
                         Personal Details
                       </Typography>
                       {[
+                        { label: "Email", value: tenantDetail.email },
                         { label: "Gender", value: tenantDetail.gender },
                         {
                           label: "Father's Name",

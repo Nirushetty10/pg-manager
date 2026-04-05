@@ -83,9 +83,7 @@ export default function InviteRegisterPage() {
 
     setSaving(true);
     try {
-      if (invite.type === "tenant")
-        await authAPI.registerTenant({ token, password });
-      else await authAPI.registerOwner({ token, password });
+      await authAPI.registerOwner({ token, password });
       setDone(true);
       setTimeout(() => navigate("/login", { replace: true }), 3000);
     } catch (err) {

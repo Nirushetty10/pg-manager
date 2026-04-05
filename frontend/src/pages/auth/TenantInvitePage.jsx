@@ -16,6 +16,7 @@ import {
   MenuItem,
   Divider,
   Chip,
+  FormHelperText,
 } from "@mui/material";
 import {
   Business,
@@ -28,7 +29,6 @@ import {
 import { authAPI } from "../../services/api";
 
 const GENDERS = ["Male", "Female", "Other", "Prefer not to say"];
-const BLOOD_GRP = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const ID_TYPES = ["Aadhar", "PAN", "Passport", "Driving License", "Voter ID"];
 
 const EMPTY = {
@@ -46,6 +46,51 @@ const EMPTY = {
   id_type: "Aadhar",
   profile_photo_file: null,
   id_proof_file: null,
+};
+
+const PHONE_REGEX = /^[6-9]\d{9}$/;
+
+const validateField = (field, value, form = {}) => {
+  switch (field) {
+    case "profile_photo_file":
+      if (!value) return "Profile photo is required";
+      return "";
+
+    case "id_proof_file":
+      if (!value) return "ID proof is required";
+      return "";
+
+    case "name":
+      if (!value?.trim()) return "Full name is required";
+      if (value.length < 2) return "Minimum 2 characters";
+      return "";
+
+    case "phone":
+      if (!value) return "Phone is required";
+      if (!PHONE_REGEX.test(value)) return "Invalid phone number";
+      return "";
+
+    case "date_of_birth":
+      if (!value) return "DOB is required";
+      return "";
+
+    case "father_name":
+      if (!value?.trim()) return "Father name required";
+      return "";
+
+    case "parent_phone":
+      if (!value) return "Parent phone required";
+      if (!PHONE_REGEX.test(value)) return "Invalid phone";
+      return "";
+
+    case "permanent_address":
+      if (!value?.trim()) return "Address required";
+      if (value.length < 10) return "Enter full address";
+      return "";
+
+    default:
+      return "";
+  }
 };
 
 const Section = ({ label }) => (
@@ -66,65 +111,103 @@ const Section = ({ label }) => (
   </Grid>
 );
 
-function FileBox({ label, accept, value, onChange, icon }) {
+// ─── FileDropZone — defined at module level, never re-created ─────────────────
+
+function FileDropZone({ label, accept, value, onChange, icon, error }) {
   const ref = useRef();
-  const preview = value ? URL.createObjectURL(value) : null;
+  const isImg =
+    value &&
+    (typeof value === "string"
+      ? value.match(/\.(jpg|jpeg|png|webp)/i)
+      : value.type?.startsWith("image/"));
+  const src =
+    value &&
+    (typeof value === "string"
+      ? value.startsWith("/")
+        ? `${API_BASE}${value}`
+        : value
+      : URL.createObjectURL(value));
+
   return (
-    <Box
-      onClick={() => ref.current?.click()}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault();
-        const f = e.dataTransfer.files[0];
-        if (f) onChange(f);
-      }}
-      sx={{
-        height: 90,
-        border: "2px dashed",
-        borderColor: value ? "#1B3A6B" : "#D1D5DB",
-        borderRadius: 2.5,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        cursor: "pointer",
-        overflow: "hidden",
-        bgcolor: value ? "#F0F4FF" : "#FAFAFA",
-        "&:hover": { borderColor: "#1B3A6B", bgcolor: "#EEF2FF" },
-        transition: "all 0.15s",
-      }}
-    >
-      {value && value.type?.startsWith("image/") ? (
-        <Box
-          component="img"
-          src={preview}
-          sx={{ width: "100%", height: "100%", objectFit: "cover" }}
-        />
-      ) : value ? (
-        <Box sx={{ textAlign: "center" }}>
-          <BadgeOutlined sx={{ color: "#1B3A6B", fontSize: 24 }} />
-          <Typography
-            sx={{ fontSize: "0.7rem", color: "#1B3A6B", fontWeight: 600 }}
-          >
-            {value.name?.substring(0, 20)}
-          </Typography>
-        </Box>
-      ) : (
-        <Box sx={{ textAlign: "center" }}>
-          {icon || <CloudUpload sx={{ color: "#9CA3AF", fontSize: 24 }} />}
-          <Typography sx={{ fontSize: "0.7rem", color: "#9CA3AF", mt: 0.3 }}>
-            {label}
-          </Typography>
-        </Box>
-      )}
-      <input
-        ref={ref}
-        type="file"
-        accept={accept}
-        style={{ display: "none" }}
-        onChange={(e) => {
-          if (e.target.files[0]) onChange(e.target.files[0]);
+    <Box>
+      <Box
+        onClick={() => ref.current?.click()}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          const f = e.dataTransfer.files[0];
+          if (f) onChange(f);
         }}
-      />
+        sx={{
+          height: 90,
+          border: "2px dashed",
+          borderColor: error ? "#DC2626" : value ? "#1B3A6B" : "#D1D5DB",
+          borderRadius: 2,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          overflow: "hidden",
+          bgcolor: error ? "#FEF2F2" : value ? "#EEF2FF" : "#FAFAFA",
+          "&:hover": { borderColor: error ? "#DC2626" : "#1B3A6B" },
+          transition: "all 0.15s",
+        }}
+      >
+        {value && isImg ? (
+          <Box
+            component="img"
+            src={src}
+            sx={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+        ) : value ? (
+          <Box sx={{ textAlign: "center" }}>
+            <BadgeOutlined sx={{ color: "#1B3A6B", fontSize: 22 }} />
+            <Typography
+              sx={{
+                fontSize: "0.68rem",
+                color: "#1B3A6B",
+                fontWeight: 600,
+                mt: 0.3,
+              }}
+            >
+              {typeof value === "string"
+                ? "Uploaded"
+                : value.name?.substring(0, 18)}
+            </Typography>
+          </Box>
+        ) : (
+          <Box sx={{ textAlign: "center" }}>
+            {icon || (
+              <CloudUpload
+                sx={{ color: error ? "#DC2626" : "#9CA3AF", fontSize: 24 }}
+              />
+            )}
+            <Typography
+              sx={{
+                fontSize: "0.68rem",
+                color: error ? "#DC2626" : "#9CA3AF",
+                mt: 0.3,
+              }}
+            >
+              {label}
+            </Typography>
+          </Box>
+        )}
+        <input
+          ref={ref}
+          type="file"
+          accept={accept}
+          style={{ display: "none" }}
+          onChange={(e) => {
+            if (e.target.files[0]) onChange(e.target.files[0]);
+          }}
+        />
+      </Box>
+      {error && (
+        <FormHelperText error sx={{ mx: "14px", mt: "3px" }}>
+          {error}
+        </FormHelperText>
+      )}
     </Box>
   );
 }
@@ -140,6 +223,8 @@ export default function TenantInvitePage() {
   const [submitErr, setSubmitErr] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [touched, setTouched] = useState({});
   const validated = useRef(false);
 
   useEffect(() => {
@@ -173,15 +258,54 @@ export default function TenantInvitePage() {
       .finally(() => setValidating(false));
   }, [token]);
 
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k, v) => {
+    setForm((f) => {
+      const updated = { ...f, [k]: v };
+
+      if (fieldErrors[k]) {
+        setFieldErrors((prev) => ({
+          ...prev,
+          [k]: validateField(k, v, updated),
+        }));
+      }
+
+      return updated;
+    });
+  };
+
+  const handleBlur = (field) => {
+    setTouched((t) => ({ ...t, [field]: true }));
+
+    setFieldErrors((prev) => ({
+      ...prev,
+      [field]: validateField(field, form[field], form),
+    }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmitErr("");
-    if (!form.name || !form.phone)
-      return setSubmitErr("Name and phone are required");
-    if (!form.permanent_address)
-      return setSubmitErr("Permanent address is required");
+    const errors = {};
+    [
+      "profile_photo_file",
+      "id_proof_file",
+      "name",
+      "phone",
+      "date_of_birth",
+      "father_name",
+      "parent_phone",
+      "permanent_address",
+    ].forEach((field) => {
+      const err = validateField(field, form[field], form);
+      if (err) errors[field] = err;
+    });
+
+    setFieldErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
+      setSubmitErr("Please fix all required fields");
+      return;
+    }
     setSaving(true);
     try {
       const fd = new FormData();
@@ -353,14 +477,22 @@ export default function TenantInvitePage() {
                       >
                         Profile Photo
                       </Typography>
-                      <FileBox
-                        label="Upload Photo"
+                      <FileDropZone
+                        label="Upload"
                         accept="image/*"
-                        value={form.profile_photo_file}
-                        onChange={(f) => set("profile_photo_file", f)}
+                        value={form.profile_photo_file || form.profile_photo}
+                        onChange={(f) => onFileChange("profile_photo_file", f)}
                         icon={
-                          <Person sx={{ color: "#9CA3AF", fontSize: 26 }} />
+                          <Person
+                            sx={{
+                              color: fieldErrors.profile_photo_file
+                                ? "#DC2626"
+                                : "#9CA3AF",
+                              fontSize: 24,
+                            }}
+                          />
                         }
+                        error={fieldErrors.profile_photo_file}
                       />
                     </Grid>
                     <Grid item xs={8}>
@@ -369,14 +501,17 @@ export default function TenantInvitePage() {
                       >
                         ID Proof (PDF or Image)
                       </Typography>
-                      <FileBox
-                        label="Upload Aadhar / PAN / Passport"
+                      <FileDropZone
+                        label="PDF or Image"
                         accept="image/*,.pdf"
-                        value={form.id_proof_file}
-                        onChange={(f) => set("id_proof_file", f)}
+                        value={form.id_proof_file || form.id_proof}
+                        onChange={(f) => onFileChange("id_proof_file", f)}
+                        error={fieldErrors.id_proof_file}
                       />
+                    </Grid>
+                    <Grid item xs={8}>
                       <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
-                        <FormControl size="small" sx={{ minWidth: 130 }}>
+                        <FormControl size="small" sx={{ minWidth: 250 }}>
                           <InputLabel>ID Type</InputLabel>
                           <Select
                             value={form.id_type}
@@ -401,7 +536,8 @@ export default function TenantInvitePage() {
                         size="small"
                         value={form.name}
                         onChange={(e) => set("name", e.target.value)}
-                        required
+                        error={!!fieldErrors.name}
+                        helperText={fieldErrors.name}
                       />
                     </Grid>
                     <Grid item xs={6}>
@@ -411,7 +547,8 @@ export default function TenantInvitePage() {
                         size="small"
                         value={form.phone}
                         onChange={(e) => set("phone", e.target.value)}
-                        required
+                        error={!!fieldErrors.phone}
+                        helperText={fieldErrors.phone}
                       />
                     </Grid>
                     <Grid item xs={6}>
@@ -422,6 +559,8 @@ export default function TenantInvitePage() {
                         type="email"
                         value={form.email}
                         onChange={(e) => set("email", e.target.value)}
+                        error={!!fieldErrors.email}
+                        helperText={fieldErrors.email}
                       />
                     </Grid>
                     <Grid item xs={6}>
@@ -449,6 +588,17 @@ export default function TenantInvitePage() {
                         InputLabelProps={{ shrink: true }}
                         value={form.date_of_birth}
                         onChange={(e) => set("date_of_birth", e.target.value)}
+                        error={!!fieldErrors.date_of_birth}
+                        helperText={fieldErrors.date_of_birth}
+                      />
+                    </Grid>
+                    <Grid item xs={6}>
+                      <TextField
+                        fullWidth
+                        label="Occupation"
+                        size="small"
+                        value={form.occupation}
+                        onChange={(e) => set("occupation", e.target.value)}
                       />
                     </Grid>
                     <Grid item xs={6}>
@@ -458,6 +608,8 @@ export default function TenantInvitePage() {
                         size="small"
                         value={form.father_name}
                         onChange={(e) => set("father_name", e.target.value)}
+                        error={!!fieldErrors.father_name}
+                        helperText={fieldErrors.father_name}
                       />
                     </Grid>
                     <Grid item xs={6}>
@@ -467,17 +619,11 @@ export default function TenantInvitePage() {
                         size="small"
                         value={form.parent_phone}
                         onChange={(e) => set("parent_phone", e.target.value)}
+                        error={!!fieldErrors.parent_phone}
+                        helperText={fieldErrors.parent_phone}
                       />
                     </Grid>
-                    <Grid item xs={12}>
-                      <TextField
-                        fullWidth
-                        label="Occupation"
-                        size="small"
-                        value={form.occupation}
-                        onChange={(e) => set("occupation", e.target.value)}
-                      />
-                    </Grid>
+
                     <Grid item xs={12}>
                       <TextField
                         fullWidth
@@ -489,7 +635,8 @@ export default function TenantInvitePage() {
                         onChange={(e) =>
                           set("permanent_address", e.target.value)
                         }
-                        required
+                        error={!!fieldErrors.permanent_address}
+                        helperText={fieldErrors.permanent_address}
                       />
                     </Grid>
 
