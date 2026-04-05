@@ -118,15 +118,12 @@ export default function TenantsPage() {
   }, [pgId, tab, search, page]);
 
   useEffect(() => {
-    debugger;
     fetch();
   }, [fetch]);
   useEffect(() => {
-    debugger;
     api
       .getRooms()
       .then((r) => {
-        debugger;
         setRooms(r.data.rooms || []);
       })
       .catch(() => {});
@@ -148,7 +145,6 @@ export default function TenantsPage() {
     setErr("");
     if (!form.name || !form.phone) return setErr("Name and phone are required");
     setSaving(true);
-    debugger;
     try {
       await api.createTenant(form);
       setAddOpen(false);

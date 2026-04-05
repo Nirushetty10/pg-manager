@@ -61,10 +61,6 @@ async function createIndexes(client) {
       sql: "CREATE INDEX IF NOT EXISTS idx_expenses_pg ON expenses(pg_id)",
     },
     {
-      name: "idx_maintenance_pg",
-      sql: "CREATE INDEX IF NOT EXISTS idx_maintenance_pg ON maintenance_requests(pg_id)",
-    },
-    {
       name: "idx_role_perms",
       sql: "CREATE INDEX IF NOT EXISTS idx_role_perms ON role_permissions(pg_id, role)",
     },
@@ -493,15 +489,6 @@ async function migrate() {
         [pgId, ...e],
       );
     }
-
-    // Maintenance
-    await client.query(
-      `
-      INSERT INTO maintenance_requests (pg_id, title, priority, status)
-      VALUES ($1,'AC Unit - Water Leakage','urgent','open'), ($1,'Faulty Light Fixture','normal','open')
-    `,
-      [pgId],
-    );
 
     // Activity log
     await client.query(

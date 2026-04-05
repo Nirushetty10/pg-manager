@@ -1,16 +1,24 @@
 {
-  "name": "pg-manager-v2",
+  "name": "pg-manager-backend",
   "version": "2.0.0",
-  "description": "Multi-Owner PG Management Platform",
-  "private": true,
+  "main": "src/index.js",
   "scripts": {
-    "install:all": "cd backend && npm install && cd ../frontend && npm install",
-    "dev:backend": "cd backend && npm run dev",
-    "dev:frontend": "cd frontend && npm run dev",
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "migrate": "cd backend && npm run migrate",
-    "build": "cd frontend && npm run build",
-    "start": "cd backend && npm start"
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "migrate": "node src/config/migrate.js",
+    "migrate:v2": "node src/config/migrate_v2.js"
   },
-  "devDependencies": { "concurrently": "^8.2.2" }
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.11.3",
+    "qrcode": "^1.5.3",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": { "nodemon": "^3.0.2" }
 }
