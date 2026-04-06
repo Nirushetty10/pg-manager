@@ -4,6 +4,7 @@ const cors = require("cors");
 const morgan = require("morgan");
 const path = require("path");
 const routes = require("./routes");
+require("./jobs/generateMonthlyDues");
 
 const app = express();
 const PORT = process.env.PORT || 5000;

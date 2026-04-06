@@ -154,13 +154,6 @@ const tenantUpload = upload.fields([
   { name: "id_proof", maxCount: 1 },
 ]);
 pg.get(
-  "/tenants/qr-code",
-  auth,
-  requirePGAccess,
-  requirePermission("manage_tenants"),
-  tenantCtrl.getQRCode,
-);
-pg.get(
   "/tenants",
   auth,
   requirePGAccess,
@@ -227,6 +220,13 @@ pg.post(
   requirePermission("manage_tenants"),
   tenantCtrl.inviteTenant,
 );
+pg.get(
+  "/tenants/qr-code",
+  auth,
+  requirePGAccess,
+  requirePermission("manage_tenants"),
+  tenantCtrl.getQRCode,
+);
 
 // Rooms (no maintenance)
 pg.get(
@@ -287,20 +287,12 @@ pg.get(
   requirePermission("record_payments"),
   finCtrl.getPayments,
 );
-pg.post(
-  "/payments",
+pg.get(
+  "/payments/ledger",
   auth,
   requirePGAccess,
   requirePermission("record_payments"),
-  finCtrl.createPayment,
-);
-pg.delete('/payments/:paymentId',  auth, requireOwner, finCtrl.deletePayment);
-pg.put(
-  "/payments/:paymentId",
-  auth,
-  requirePGAccess,
-  requirePermission("record_payments"),
-  finCtrl.updatePayment,
+  finCtrl.getPgLedger,
 );
 pg.get(
   "/payments/export-csv",
@@ -308,6 +300,34 @@ pg.get(
   requirePGAccess,
   requirePermission("record_payments"),
   finCtrl.exportPaymentsCSV,
+);
+pg.post(
+  "/payments",
+  auth,
+  requirePGAccess,
+  requirePermission("record_payments"),
+  finCtrl.createPayment,
+);
+pg.put(
+  "/payments/:paymentId",
+  auth,
+  requirePGAccess,
+  requirePermission("record_payments"),
+  finCtrl.updatePayment,
+);
+pg.delete(
+  "/payments/:paymentId",
+  auth,
+  requirePGAccess,
+  requirePermission("record_payments"),
+  finCtrl.deletePayment,
+);
+pg.get(
+  "/tenants/:tenantId/ledger",
+  auth,
+  requirePGAccess,
+  requirePermission("manage_tenants"),
+  finCtrl.getTenantLedger,
 );
 
 // Expenses

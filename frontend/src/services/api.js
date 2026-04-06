@@ -1,7 +1,6 @@
 import axios from "axios";
 const API = axios.create({
-  // baseURL: import.meta.env.VITE_API_URL || "/api",
-  baseURL: "http://localhost:5000/api",
+  baseURL: import.meta.env.VITE_API_URL || "/api",
   timeout: 20000,
 });
 API.interceptors.request.use((cfg) => {
@@ -72,9 +71,11 @@ const pg = (pgId) => ({
   assignBed: (d) => API.post(`/pg/${pgId}/rooms/assign-bed`, d),
   unassignBed: (d) => API.post(`/pg/${pgId}/rooms/unassign-bed`, d),
   getPayments: (p) => API.get(`/pg/${pgId}/payments`, { params: p }),
+  getPgLedger: () => API.get(`/pg/${pgId}/payments/ledger`),
+  getTenantLedger: (id) => API.get(`/pg/${pgId}/tenants/${id}/ledger`),
   createPayment: (d) => API.post(`/pg/${pgId}/payments`, d),
   updatePayment: (id, d) => API.put(`/pg/${pgId}/payments/${id}`, d),
-  deletePayment: (paymentId) => API.delete(`/pg/${pgId}/payments/${paymentId}`),
+  deletePayment: (id) => API.delete(`/pg/${pgId}/payments/${id}`),
   exportPaymentsCSV: (p) =>
     API.get(`/pg/${pgId}/payments/export-csv`, {
       params: p,
