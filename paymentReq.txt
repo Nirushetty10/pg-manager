@@ -1,0 +1,255 @@
+You are a senior full-stack engineer. I am building a PG (Paying Guest) management SaaS using React (frontend), Node.js + Express (backend), and PostgreSQL.
+
+I want to implement a **production-ready rent/payment system** with a ledger-based architecture, clean UI, and real-world finance logic.
+
+---
+
+# 🎯 OBJECTIVE
+
+Build a complete **rent tracking + payment system** with:
+
+* Monthly ledger tracking
+* Previous dues handling
+* Smart payment allocation (previous → current)
+* Clean UI/UX for owners
+* Automated monthly due generation
+* Email reminders for overdue payments
+* No duplicate or invalid payment entries
+
+---
+
+# 🧱 BACKEND REQUIREMENTS
+
+## 1. Ledger-Based System
+
+Create a `rent_ledger` table:
+
+* tenant_id
+* pg_id
+* month (DATE, first day of month)
+* rent_amount
+* paid_amount (default 0)
+* balance_due
+* prev_balance (carry-forward)
+* status ('due', 'partial', 'paid')
+* due_date (e.g., 5th of every month)
+* created_at
+
+Constraints:
+
+* UNIQUE (tenant_id, month)
+
+---
+
+## 2. Monthly Auto Due Creation
+
+Implement a CRON job:
+
+* Runs on 1st of every month
+* Creates a new ledger entry for all active tenants
+* Sets:
+
+  * rent_amount = monthly_rent
+  * paid_amount = 0
+  * balance_due = monthly_rent
+  * status = 'due'
+
+Use:
+
+* ON CONFLICT DO NOTHING
+
+---
+
+## 3. Payment Logic (CRITICAL)
+
+When a payment is made:
+
+### Step 1: Allocate to previous dues first
+
+* If prev_balance > 0 → deduct from it first
+
+### Step 2: Remaining goes to current month
+
+### Example:
+
+* Previous due = 4000
+* Current rent = 6000
+* Payment = 5000
+
+Result:
+
+* Previous cleared = 4000
+* Current paid = 1000
+* Current due = 5000
+
+---
+
+## 4. Update Ledger Properly
+
+After every payment:
+
+* Update:
+
+  * paid_amount
+  * balance_due
+  * prev_balance
+  * status
+
+Never overwrite blindly — always calculate from existing data.
+
+---
+
+## 5. Prevent Duplicate Payments
+
+* Do not allow payment if:
+
+  * tenant has no outstanding dues
+* Dropdown should only include tenants with:
+
+  * balance_due > 0 OR prev_balance > 0
+
+---
+
+## 6. Delete Payment Logic
+
+* When payment is deleted:
+
+  * Recalculate ledger
+  * Restore previous + current balances correctly
+
+---
+
+## 7. Tenant Status Handling
+
+* If tenant is vacated:
+
+  * Do NOT delete payment history
+  * Mark status = 'vacated'
+  * Exclude from active UI
+
+---
+
+## 8. Email Reminder System
+
+* Run daily cron job
+* If:
+
+  * due_date < today
+  * AND balance_due > 0
+* Send email notification
+
+---
+
+# 🎨 FRONTEND REQUIREMENTS (React)
+
+## 1. Dashboard Cards
+
+Remove:
+
+* Partial payments card
+
+Add:
+
+* Current Month Due
+* Previous Dues
+
+---
+
+## 2. Outstanding Dues Table
+
+* Fixed height with scroll
+* Add search:
+
+  * tenant name
+  * room number
+* Add filters:
+
+  * High dues
+  * Old dues
+
+---
+
+## 3. Payment Modal
+
+When selecting tenant:
+
+Display:
+
+* Current month due
+* Previous dues
+* Total outstanding
+
+---
+
+## 4. Smart UI Behavior
+
+* If all tenants paid:
+
+  * Hide "Record Payment" button
+* Fully paid tenants:
+
+  * Remove from dropdown
+
+---
+
+## 5. Ledger UI (IMPORTANT)
+
+Show month-wise table:
+
+| Month | Rent | Paid | Due | Status |
+
+---
+
+## 6. Monthly Collection Progress
+
+* Show collected vs total rent
+* Show % progress
+
+---
+
+#7 Add This month and history tab for payment records
+ * By default select this month -> show only current month payments list.
+ * history -> all records.
+
+# 🧪 EDGE CASES
+
+Handle:
+
+* Multiple payments in same month
+* Overpayment
+* Payment deletion
+* No payments (full due)
+* Month transition
+* Vacated tenants
+
+---
+
+# 📦 OUTPUT REQUIRED
+
+Provide:
+
+1. PostgreSQL schema (rent_ledger + required fields)
+2. Cron job implementation
+3. createPayment API (correct logic)
+4. deletePayment API (correct logic)
+5. API to fetch ledger
+6. Frontend component structure (React)
+7. Best practices for scalability
+
+---
+
+# ⚠️ IMPORTANT
+
+* Keep logic clean and maintainable
+* Follow real-world accounting behavior
+* Avoid hacks
+* Focus on correctness + scalability
+
+---
+
+# 🎯 FINAL GOAL
+
+Build a **professional-grade rent management system** similar to real SaaS platforms used by PG owners and property managers.
+
+
+#Important# ->  Never miss any tenants payment records.
