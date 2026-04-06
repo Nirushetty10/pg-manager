@@ -294,6 +294,7 @@ pg.post(
   requirePermission("record_payments"),
   finCtrl.createPayment,
 );
+pg.delete('/payments/:paymentId',  auth, requireOwner, finCtrl.deletePayment);
 pg.put(
   "/payments/:paymentId",
   auth,

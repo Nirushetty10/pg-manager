@@ -32,7 +32,12 @@ const getRooms = async (req, res) => {
         COUNT(*) FILTER (WHERE status='occupied') as occupied_rooms,
         (SELECT COUNT(*) FROM beds WHERE pg_id=$1) as total_beds,
         (SELECT COUNT(*) FROM beds WHERE pg_id=$1 AND status='available') as available_beds,
-        (SELECT COUNT(*) FROM beds WHERE pg_id=$1 AND status='occupied') as occupied_beds
+        (SELECT COUNT(*) FROM beds WHERE pg_id=$1 AND status='occupied') as occupied_beds,
+        (SELECT COUNT(*) FROM pg_tenants WHERE pg_id=$1 AND status='pending') as pending_tenants,
+        ROUND(
+          (SELECT COUNT(*) FROM beds WHERE pg_id=$1 AND status='occupied')::numeric /
+          NULLIF((SELECT COUNT(*) FROM beds WHERE pg_id=$1),0)*100,1
+        ) as occupancy_pct
       FROM rooms WHERE pg_id=$1
     `, [pgId]);
 
