@@ -1,10 +1,10 @@
-import axios from "axios";
+import axios from 'axios';
 const API = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "/api",
+  baseURL: import.meta.env.VITE_API_URL || '/api',
   timeout: 20000,
 });
 API.interceptors.request.use((cfg) => {
-  const t = localStorage.getItem("pg_token");
+  const t = localStorage.getItem('pg_token');
   if (t) cfg.headers.Authorization = `Bearer ${t}`;
   return cfg;
 });
@@ -13,30 +13,30 @@ API.interceptors.response.use(
   (err) => {
     if (err.response?.status === 401) {
       localStorage.clear();
-      window.location.href = "/login";
+      window.location.href = '/login';
     }
     return Promise.reject(err);
   },
 );
 export const authAPI = {
-  login: (d) => API.post("/auth/login", d),
-  getMe: () => API.get("/auth/me"),
-  inviteOwner: (d) => API.post("/auth/invite/owner", d),
+  login: (d) => API.post('/auth/login', d),
+  getMe: () => API.get('/auth/me'),
+  inviteOwner: (d) => API.post('/auth/invite/owner', d),
   validateInvite: (t) => API.get(`/auth/invite/${t}`),
-  registerOwner: (d) => API.post("/auth/register/owner", d),
+  registerOwner: (d) => API.post('/auth/register/owner', d),
   validateTenantInvite: (t) => API.get(`/tenant-invite/${t}`),
-  submitTenantInvite: (fd) => API.post("/tenant-invite/submit", fd),
+  submitTenantInvite: (fd) => API.post('/tenant-invite/submit', fd),
 };
 export const masterAPI = {
-  getDashboard: () => API.get("/master/dashboard"),
-  getOwners: (p) => API.get("/master/owners", { params: p }),
+  getDashboard: () => API.get('/master/dashboard'),
+  getOwners: (p) => API.get('/master/owners', { params: p }),
   getOwnerById: (id) => API.get(`/master/owners/${id}`),
   toggleOwnerStatus: (id) => API.patch(`/master/owners/${id}/toggle`),
   getPGDetails: (pgId) => API.get(`/master/pgs/${pgId}`),
 };
 export const ownerAPI = {
-  getPGs: () => API.get("/owner/pgs"),
-  createPG: (d) => API.post("/owner/pgs", d),
+  getPGs: () => API.get('/owner/pgs'),
+  createPG: (d) => API.post('/owner/pgs', d),
 };
 const pg = (pgId) => ({
   get: () => API.get(`/pg/${pgId}`),
@@ -79,7 +79,7 @@ const pg = (pgId) => ({
   exportPaymentsCSV: (p) =>
     API.get(`/pg/${pgId}/payments/export-csv`, {
       params: p,
-      responseType: "blob",
+      responseType: 'blob',
     }),
   getExpenses: (p) => API.get(`/pg/${pgId}/expenses`, { params: p }),
   createExpense: (d) => API.post(`/pg/${pgId}/expenses`, d),
