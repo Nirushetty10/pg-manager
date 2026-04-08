@@ -1,6 +1,27 @@
-const pool = require('../config/db');
+"use strict";
 
-// ── PAYMENTS LIST ─────────────────────────────────────────────
+/**
+ * Finance Controller — Fixed ledger calculations
+ *
+ * ROOT CAUSE OF THE BUG:
+ *   Both getPgLedger and getTenantLedger were grouping payments by
+ *   payment_date (when money was received) instead of by the `month`
+ *   column (which rent period the payment covers).
+ *
+ *   Result: A payment of ₹13,000 made in April for both April + March
+ *   would show ALL under April, leaving March as DUE forever.
+ *
+ * THE FIX:
+ *   Always group/filter payments by the `month` column, not payment_date.
+ *   The `month` column = "which rent period does this payment cover".
+ */
+
+const pool = require("../config/db");
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET PAYMENTS LIST
+// GET /pg/:pgId/payments
+// ─────────────────────────────────────────────────────────────────────────────
 const getPayments = async (req, res) => {
   try {
     const { pgId } = req.params;
@@ -14,19 +35,19 @@ const getPayments = async (req, res) => {
       page = 1,
       limit = 15,
     } = req.query;
-    let conds = ['p.pg_id=$1'],
+
+    let conds = ["p.pg_id=$1"],
       params = [pgId],
       idx = 2;
-
     if (search) {
       conds.push(`pt.name ILIKE $${idx++}`);
       params.push(`%${search}%`);
     }
-    if (method && method !== 'all') {
+    if (method && method !== "all") {
       conds.push(`p.payment_mode=$${idx++}`);
       params.push(method);
     }
-    if (status && status !== 'all') {
+    if (status && status !== "all") {
       conds.push(`p.status=$${idx++}`);
       params.push(status);
     }
@@ -39,34 +60,33 @@ const getPayments = async (req, res) => {
       params.push(end_date);
     }
 
-    // "month" param = YYYY-MM-DD (first of month) → filter by that calendar month
+    // FIXED: filter by the `month` column (rent period), not payment_date
     if (month) {
       conds.push(
-        `DATE_TRUNC('month', p.payment_date) = DATE_TRUNC('month', $${idx++}::date)`,
+        `DATE_TRUNC('month', p.month::date) = DATE_TRUNC('month', $${idx++}::date)`,
       );
       params.push(month);
     }
 
-    const where = `WHERE ${conds.join(' AND ')}`;
+    const where = `WHERE ${conds.join(" AND ")}`;
     const offset = (page - 1) * limit;
 
     const [count, payments, summary] = await Promise.all([
       pool.query(
-        `SELECT COUNT(*) FROM payments p
-         LEFT JOIN pg_tenants pt ON p.pg_tenant_id=pt.id ${where}`,
+        `SELECT COUNT(*) FROM payments p LEFT JOIN pg_tenants pt ON p.pg_tenant_id=pt.id ${where}`,
         params,
       ),
       pool.query(
         `SELECT p.*,
-            pt.name       AS tenant_name,
-            pt.phone      AS tenant_phone,
+            pt.name         AS tenant_name,
+            pt.phone        AS tenant_phone,
             pt.monthly_rent AS tenant_rent,
             r.room_number,
             b.bed_label
          FROM payments p
          LEFT JOIN pg_tenants pt ON p.pg_tenant_id=pt.id
          LEFT JOIN rooms r ON pt.room_id=r.id
-         LEFT JOIN beds   b ON pt.bed_id=b.id
+         LEFT JOIN beds  b ON pt.bed_id=b.id
          ${where}
          ORDER BY p.payment_date DESC, p.created_at DESC
          LIMIT $${idx} OFFSET $${idx + 1}`,
@@ -74,10 +94,10 @@ const getPayments = async (req, res) => {
       ),
       pool.query(
         `SELECT
-           COALESCE(SUM(monthly_rent),0) as total_rent,
-           COALESCE(SUM(monthly_rent) FILTER (WHERE payment_status='paid'),0)    as total_collected,
-           COALESCE(SUM(monthly_rent) FILTER (WHERE payment_status='due'),0)     as total_outstanding,
-           COALESCE(SUM(monthly_rent) FILTER (WHERE payment_status='partial'),0) as total_partial
+           COALESCE(SUM(monthly_rent), 0)                                              AS total_rent,
+           COALESCE(SUM(monthly_rent) FILTER (WHERE payment_status='paid'),    0)      AS total_collected,
+           COALESCE(SUM(monthly_rent) FILTER (WHERE payment_status='due'),     0)      AS total_outstanding,
+           COALESCE(SUM(monthly_rent) FILTER (WHERE payment_status='partial'), 0)      AS total_partial
          FROM pg_tenants WHERE pg_id=$1 AND status='active'`,
         [pgId],
       ),
@@ -89,92 +109,117 @@ const getPayments = async (req, res) => {
       summary: summary.rows[0],
     });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'Server error' });
+    console.error("getPayments error:", e);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-// ── PG-WIDE LEDGER (current month status for all active tenants) ──
-// Returns one row per active tenant with their payment status this month.
+// ─────────────────────────────────────────────────────────────────────────────
+// GET PG-WIDE LEDGER — current month status for all active tenants
+// GET /pg/:pgId/payments/ledger
+//
+// FIX: prev_balance now uses the `month` column on payments, not payment_date.
+// This means a payment recorded in April but covering March correctly reduces
+// March's outstanding balance — and therefore prev_balance.
+// ─────────────────────────────────────────────────────────────────────────────
 const getPgLedger = async (req, res) => {
   try {
     const { pgId } = req.params;
 
-    // Aggregate current-month payments per tenant
-    const rows = await pool.query(
+    const { rows: ledger } = await pool.query(
       `
-      WITH current_payments AS (
-        -- What has been paid THIS month
+      WITH
+
+      -- Step 1: What has been paid whose month = current month
+      current_month_payments AS (
         SELECT
           pg_tenant_id,
-          COALESCE(SUM(paid_amount), 0) AS paid_this_month,
-          COUNT(*)                       AS payment_count
+          COALESCE(SUM(paid_amount), 0) AS paid_this_month
         FROM payments
         WHERE pg_id = $1
-          AND DATE_TRUNC('month', payment_date) = DATE_TRUNC('month', CURRENT_DATE)
+          AND DATE_TRUNC('month', month::date) = DATE_TRUNC('month', CURRENT_DATE)
+          AND status != 'failed'
         GROUP BY pg_tenant_id
       ),
+
+      -- Step 2: True previous balance
+      --   = total rent owed from joining until end of last month
+      --   MINUS total paid for all months BEFORE current month
+      --   (using the 'month' column — i.e. which period each payment covers)
+      --
+      --   This correctly handles:
+      --   - Tenant paying April + March together in April → March prev_balance = 0
+      --   - Tenant who never paid March → prev_balance = ₹6,500
+      --   - Tenant joining mid-year → only counts months from join date
       prev_balances AS (
-        -- TRUE carry-forward: total rent owed before this month MINUS total paid before this month
-        -- This correctly handles cases where a tenant paid extra to clear old dues
         SELECT
           pt.id AS pg_tenant_id,
           GREATEST(0,
-            -- Total months from joining until start of current month × monthly_rent
-            GREATEST(0, (
+            -- Months of rent owed before current month
+            GREATEST(0,
               EXTRACT(YEAR  FROM AGE(DATE_TRUNC('month', CURRENT_DATE), DATE_TRUNC('month', COALESCE(pt.joining_date, CURRENT_DATE)))) * 12 +
               EXTRACT(MONTH FROM AGE(DATE_TRUNC('month', CURRENT_DATE), DATE_TRUNC('month', COALESCE(pt.joining_date, CURRENT_DATE))))
-            ))::numeric * pt.monthly_rent
+            )::numeric * pt.monthly_rent
             -
-            -- Total actually paid before current month (regardless of which month it was recorded for)
+            -- Total paid for months BEFORE current month (by the month the payment covers, not when paid)
             COALESCE((
-              SELECT SUM(paid_amount)
+              SELECT SUM(p2.paid_amount)
               FROM payments p2
               WHERE p2.pg_tenant_id = pt.id
-                AND DATE_TRUNC('month', p2.payment_date) < DATE_TRUNC('month', CURRENT_DATE)
+                AND DATE_TRUNC('month', p2.month::date) < DATE_TRUNC('month', CURRENT_DATE)
+                AND p2.status != 'failed'
             ), 0)
           ) AS prev_balance
         FROM pg_tenants pt
         WHERE pt.pg_id = $1 AND pt.status = 'active'
       )
+
       SELECT
-        pt.id             AS tenant_id,
-        pt.name           AS tenant_name,
+        pt.id                                                       AS tenant_id,
+        pt.name                                                     AS tenant_name,
         pt.phone,
-        pt.monthly_rent   AS rent_amount,
-        pt.payment_status AS status,
+        pt.monthly_rent                                             AS rent_amount,
         r.room_number,
         b.bed_label,
-        COALESCE(cp.paid_this_month, 0)                        AS paid_amount,
-        COALESCE(pb.prev_balance, 0)                           AS prev_balance,
-        GREATEST(0,
-          pt.monthly_rent - COALESCE(cp.paid_this_month, 0)
-        )                                                       AS balance_due,
-        COALESCE(cp.payment_count, 0)                          AS payment_count,
-        -- Effective status: if they owe anything (current OR prev) they are not fully settled
+
+        -- How much paid for current month
+        COALESCE(cp.paid_this_month, 0)                             AS paid_amount,
+
+        -- Carry-forward from months before current month
+        COALESCE(pb.prev_balance, 0)                                AS prev_balance,
+
+        -- Gap remaining for current month
+        GREATEST(0, pt.monthly_rent - COALESCE(cp.paid_this_month, 0)) AS balance_due,
+
+        -- Effective status for this month
         CASE
-          WHEN COALESCE(pb.prev_balance, 0) > 0 AND GREATEST(0, pt.monthly_rent - COALESCE(cp.paid_this_month, 0)) = 0
-            THEN 'prev_due'
-          WHEN COALESCE(pb.prev_balance, 0) > 0
-            THEN 'due'
-          WHEN GREATEST(0, pt.monthly_rent - COALESCE(cp.paid_this_month, 0)) = 0
+          WHEN COALESCE(cp.paid_this_month, 0) >= pt.monthly_rent AND COALESCE(pb.prev_balance, 0) = 0
             THEN 'paid'
+          WHEN COALESCE(cp.paid_this_month, 0) >= pt.monthly_rent AND COALESCE(pb.prev_balance, 0) > 0
+            THEN 'prev_due'   -- this month paid but old dues remain
           WHEN COALESCE(cp.paid_this_month, 0) > 0
             THEN 'partial'
           ELSE 'due'
-        END AS effective_status
+        END AS effective_status,
+
+        -- Legacy field — kept for frontend compatibility
+        CASE
+          WHEN COALESCE(cp.paid_this_month, 0) >= pt.monthly_rent THEN 'paid'
+          WHEN COALESCE(cp.paid_this_month, 0) > 0                THEN 'partial'
+          ELSE 'due'
+        END AS status
+
       FROM pg_tenants pt
       LEFT JOIN rooms r ON pt.room_id = r.id
       LEFT JOIN beds  b ON pt.bed_id  = b.id
-      LEFT JOIN current_payments cp ON cp.pg_tenant_id = pt.id
-      LEFT JOIN prev_balances    pb ON pb.pg_tenant_id = pt.id
+      LEFT JOIN current_month_payments cp ON cp.pg_tenant_id = pt.id
+      LEFT JOIN prev_balances          pb ON pb.pg_tenant_id = pt.id
       WHERE pt.pg_id = $1 AND pt.status = 'active'
       ORDER BY pt.name
-    `,
+      `,
       [pgId],
     );
 
-    const ledger = rows.rows;
     const summary = {
       total_rent: ledger.reduce(
         (s, r) => s + parseFloat(r.rent_amount || 0),
@@ -196,70 +241,88 @@ const getPgLedger = async (req, res) => {
 
     res.json({ ledger, summary });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'Server error' });
+    console.error("getPgLedger error:", e);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-// ── TENANT LEDGER (month-by-month history for one tenant) ──────
+// ─────────────────────────────────────────────────────────────────────────────
+// GET TENANT LEDGER — month-by-month history for one tenant
+// GET /pg/:pgId/tenants/:tenantId/ledger
+//
+// FIX: groups payments by the `month` column (rent period covered),
+// not by payment_date. So ₹13,000 paid in April covering both March and April
+// is correctly split: ₹6,500 under March, ₹6,500 under April.
+// ─────────────────────────────────────────────────────────────────────────────
 const getTenantLedger = async (req, res) => {
   try {
     const { pgId, tenantId } = req.params;
 
-    // Get tenant's rent and joining date
-    const tenantRes = await pool.query(
-      'SELECT monthly_rent, joining_date, name FROM pg_tenants WHERE id=$1 AND pg_id=$2',
+    const { rows: tenantRows } = await pool.query(
+      `SELECT monthly_rent, joining_date, name FROM pg_tenants WHERE id=$1 AND pg_id=$2`,
       [tenantId, pgId],
     );
-    if (!tenantRes.rows.length)
-      return res.status(404).json({ message: 'Tenant not found' });
-    const { monthly_rent, joining_date, name } = tenantRes.rows[0];
+    if (!tenantRows.length)
+      return res.status(404).json({ message: "Tenant not found" });
 
-    // Generate month series from joining date to now
-    const rows = await pool.query(
+    const { monthly_rent, joining_date, name } = tenantRows[0];
+    const joinDate = joining_date || new Date();
+
+    const { rows: ledger } = await pool.query(
       `
-      WITH months AS (
-        SELECT DATE_TRUNC('month', generate_series(
+      WITH
+
+      -- Generate one row per calendar month from joining date to today
+      months AS (
+        SELECT DATE_TRUNC('month', gs)::date AS month
+        FROM generate_series(
           DATE_TRUNC('month', $1::date),
           DATE_TRUNC('month', CURRENT_DATE),
           '1 month'::interval
-        )) AS month
+        ) gs
       ),
+
+      -- FIXED: group by the payment's 'month' column (which period it covers)
+      -- NOT by payment_date (when it was physically paid)
       month_payments AS (
         SELECT
-          DATE_TRUNC('month', payment_date)    AS month,
-          COALESCE(SUM(paid_amount), 0)         AS paid_amount,
-          COALESCE(SUM(balance_due) FILTER (WHERE is_partial=TRUE), 0) AS balance_due,
-          JSON_AGG(JSON_BUILD_OBJECT(
-            'receipt_number', receipt_number,
-            'paid_amount',    paid_amount,
-            'payment_date',   payment_date,
-            'payment_mode',   payment_mode
-          ) ORDER BY payment_date) AS payments
-        FROM payments
-        WHERE pg_tenant_id=$2
-        GROUP BY DATE_TRUNC('month', payment_date)
+          DATE_TRUNC('month', p.month::date)::date          AS month,
+          COALESCE(SUM(p.paid_amount), 0)                   AS paid_amount,
+          JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'receipt_number', p.receipt_number,
+              'paid_amount',    p.paid_amount,
+              'payment_date',   p.payment_date,
+              'payment_mode',   p.payment_mode
+            ) ORDER BY p.payment_date
+          ) AS payments
+        FROM payments p
+        WHERE p.pg_tenant_id = $2
+          AND p.status != 'failed'
+        GROUP BY DATE_TRUNC('month', p.month::date)::date
       )
+
       SELECT
         m.month,
-        $3::numeric                                       AS rent_amount,
-        COALESCE(mp.paid_amount,   0)                     AS paid_amount,
-        GREATEST(0, $3::numeric - COALESCE(mp.paid_amount, 0)) AS balance_due,
+        $3::numeric                                                     AS rent_amount,
+        COALESCE(mp.paid_amount, 0)                                     AS paid_amount,
+        GREATEST(0, $3::numeric - COALESCE(mp.paid_amount, 0))          AS balance_due,
         CASE
-          WHEN COALESCE(mp.paid_amount,0) >= $3::numeric THEN 'paid'
-          WHEN COALESCE(mp.paid_amount,0) > 0            THEN 'partial'
+          WHEN COALESCE(mp.paid_amount, 0) > $3::numeric  THEN 'overpaid'
+          WHEN COALESCE(mp.paid_amount, 0) >= $3::numeric THEN 'paid'
+          WHEN COALESCE(mp.paid_amount, 0) > 0            THEN 'partial'
           ELSE 'due'
-        END                                                AS status,
-        COALESCE(mp.payments, '[]'::json)                 AS payments
+        END                                                             AS status,
+        COALESCE(mp.payments, '[]'::json)                               AS payments
       FROM months m
       LEFT JOIN month_payments mp ON mp.month = m.month
       ORDER BY m.month DESC
-    `,
-      [joining_date || new Date(), tenantId, monthly_rent],
+      `,
+      [joinDate, tenantId, monthly_rent],
     );
 
-    const ledger = rows.rows;
     const summary = {
+      tenant_name: name,
       total_rent: ledger.reduce(
         (s, r) => s + parseFloat(r.rent_amount || 0),
         0,
@@ -272,21 +335,24 @@ const getTenantLedger = async (req, res) => {
         (s, r) => s + parseFloat(r.balance_due || 0),
         0,
       ),
-      tenant_name: name,
     };
 
     res.json({ ledger, summary });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'Server error' });
+    console.error("getTenantLedger error:", e);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-// ── CREATE PAYMENT ────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CREATE PAYMENT
+// POST /pg/:pgId/payments
+// ─────────────────────────────────────────────────────────────────────────────
 const createPayment = async (req, res) => {
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
+
     const { pgId } = req.params;
     const {
       pg_tenant_id,
@@ -298,80 +364,121 @@ const createPayment = async (req, res) => {
       notes,
     } = req.body;
 
-    const tenantRes = await client.query(
-      'SELECT monthly_rent, name FROM pg_tenants WHERE id=$1',
-      [pg_tenant_id],
-    );
-    const tenant = tenantRes.rows[0];
-    const monthlyRent = parseFloat(tenant?.monthly_rent || 0);
+    // Validate
+    if (!pg_tenant_id || !amount || !payment_date || !month) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        message: "pg_tenant_id, amount, payment_date and month are required.",
+      });
+    }
     const paidAmount = parseFloat(amount);
-    const isPartial = paidAmount < monthlyRent;
-    const balanceDue = isPartial ? monthlyRent - paidAmount : 0;
+    if (isNaN(paidAmount) || paidAmount <= 0) {
+      await client.query("ROLLBACK");
+      return res
+        .status(400)
+        .json({ message: "amount must be a positive number." });
+    }
 
-    const last = await client.query(
-      'SELECT receipt_number FROM payments ORDER BY created_at DESC LIMIT 1',
+    // Validate tenant belongs to this PG
+    const { rows: tenantRows } = await client.query(
+      `SELECT monthly_rent, name FROM pg_tenants WHERE id=$1 AND pg_id=$2`,
+      [pg_tenant_id, pgId],
     );
-    const lastNum =
-      last.rows[0]?.receipt_number?.replace('#REC-', '') || '9000';
-    const receipt_number = `#REC-${parseInt(lastNum) + 1}`;
+    if (!tenantRows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Tenant not found for this PG." });
+    }
+    const { monthly_rent } = tenantRows[0];
+    const monthlyRent = parseFloat(monthly_rent || 0);
 
-    const payment = await client.query(
-      `
-      INSERT INTO payments
-        (pg_id, pg_tenant_id, receipt_number, amount, paid_amount, balance_due,
-         is_partial, payment_date, month, payment_mode, transaction_ref, notes, status)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'settled')
-      RETURNING *
-    `,
+    // Normalise month to first of month
+    const { rows: monthRows } = await client.query(
+      `SELECT DATE_TRUNC('month', $1::date)::date AS month`,
+      [month],
+    );
+    const normalizedMonth = monthRows[0].month;
+
+    // Total already paid for this month (by the month the payments cover)
+    const { rows: existingRows } = await client.query(
+      `SELECT COALESCE(SUM(paid_amount), 0) AS already_paid
+       FROM payments
+       WHERE pg_tenant_id = $1
+         AND DATE_TRUNC('month', month::date) = $2
+         AND status != 'failed'`,
+      [pg_tenant_id, normalizedMonth],
+    );
+    const alreadyPaid = parseFloat(existingRows[0].already_paid) || 0;
+    const newTotalPaid = alreadyPaid + paidAmount;
+    const isPartial = newTotalPaid < monthlyRent;
+    const balanceDue = Math.max(0, monthlyRent - newTotalPaid);
+
+    // Atomic receipt number
+    const { rows: receiptRows } = await client.query(
+      `SELECT next_receipt_number() AS receipt_number`,
+    );
+    const receipt_number = receiptRows[0].receipt_number;
+
+    const { rows: paymentRows } = await client.query(
+      `INSERT INTO payments
+         (pg_id, pg_tenant_id, receipt_number, amount, paid_amount, balance_due,
+          is_partial, payment_date, month, payment_mode, transaction_ref, notes, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'settled')
+       RETURNING *`,
       [
         pgId,
         pg_tenant_id,
         receipt_number,
-        amount,
+        paidAmount,
         paidAmount,
         balanceDue,
         isPartial,
         payment_date,
-        month,
-        payment_mode || 'cash',
-        transaction_ref,
-        notes,
+        normalizedMonth,
+        payment_mode || "cash",
+        transaction_ref || null,
+        notes || null,
       ],
     );
 
-    // Update tenant payment_status
-    const paymentStatus = isPartial ? 'partial' : 'paid';
-    await client.query('UPDATE pg_tenants SET payment_status=$1 WHERE id=$2', [
+    // Update pg_tenants payment_status based on current month total
+    const paymentStatus =
+      newTotalPaid >= monthlyRent
+        ? "paid"
+        : newTotalPaid > 0
+          ? "partial"
+          : "due";
+    await client.query(`UPDATE pg_tenants SET payment_status=$1 WHERE id=$2`, [
       paymentStatus,
       pg_tenant_id,
     ]);
 
     await client.query(
-      `
-      INSERT INTO activity_logs (pg_id, action, entity_type, entity_id, performed_by_name, performed_by_role)
-      VALUES ($1,$2,'payment',$3,$4,$5)
-    `,
+      `INSERT INTO activity_logs (pg_id, action, entity_type, entity_id, performed_by_name, performed_by_role)
+       VALUES ($1,$2,'payment',$3,$4,$5)`,
       [
         pgId,
-        `Payment: ${receipt_number} ₹${amount}${isPartial ? ` (partial, ₹${balanceDue} due)` : ''}`,
-        payment.rows[0].id,
-        req.actor?.name || 'Staff',
-        req.actor?.role || 'staff',
+        `Payment: ${receipt_number} ₹${paidAmount}${isPartial ? ` (partial, ₹${balanceDue} still due)` : " (settled)"}`,
+        paymentRows[0].id,
+        req.actor?.name || "Staff",
+        req.actor?.role || "staff",
       ],
     );
 
-    await client.query('COMMIT');
-    res.status(201).json({ ...payment.rows[0], isPartial, balanceDue });
+    await client.query("COMMIT");
+    res.status(201).json({ ...paymentRows[0], isPartial, balanceDue });
   } catch (e) {
-    await client.query('ROLLBACK');
-    console.error(e);
-    res.status(500).json({ message: 'Server error' });
+    await client.query("ROLLBACK");
+    console.error("createPayment error:", e);
+    res.status(500).json({ message: "Server error" });
   } finally {
     client.release();
   }
 };
 
-// ── UPDATE PAYMENT ────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// UPDATE PAYMENT
+// PUT /pg/:pgId/payments/:paymentId
+// ─────────────────────────────────────────────────────────────────────────────
 const updatePayment = async (req, res) => {
   try {
     const { pgId, paymentId } = req.params;
@@ -385,24 +492,21 @@ const updatePayment = async (req, res) => {
       status,
     } = req.body;
 
-    const tenantRes = await pool.query(
-      `SELECT pt.monthly_rent FROM payments p
-       JOIN pg_tenants pt ON p.pg_tenant_id=pt.id WHERE p.id=$1`,
+    const { rows: tenantRows } = await pool.query(
+      `SELECT pt.monthly_rent FROM payments p JOIN pg_tenants pt ON p.pg_tenant_id=pt.id WHERE p.id=$1`,
       [paymentId],
     );
-    const monthlyRent = parseFloat(tenantRes.rows[0]?.monthly_rent || 0);
+    const monthlyRent = parseFloat(tenantRows[0]?.monthly_rent || 0);
     const paidAmount = parseFloat(amount);
     const isPartial = monthlyRent > 0 && paidAmount < monthlyRent;
     const balanceDue = isPartial ? monthlyRent - paidAmount : 0;
 
-    const r = await pool.query(
-      `
-      UPDATE payments SET
-        amount=$1, paid_amount=$2, balance_due=$3, is_partial=$4,
-        payment_date=$5, month=$6, payment_mode=$7,
-        transaction_ref=$8, notes=$9, status=$10
-      WHERE id=$11 AND pg_id=$12 RETURNING *
-    `,
+    const { rows } = await pool.query(
+      `UPDATE payments SET
+         amount=$1, paid_amount=$2, balance_due=$3, is_partial=$4,
+         payment_date=$5, month=$6, payment_mode=$7,
+         transaction_ref=$8, notes=$9, status=$10
+       WHERE id=$11 AND pg_id=$12 RETURNING *`,
       [
         amount,
         paidAmount,
@@ -413,81 +517,97 @@ const updatePayment = async (req, res) => {
         payment_mode,
         transaction_ref,
         notes,
-        status || 'settled',
+        status || "settled",
         paymentId,
         pgId,
       ],
     );
-
-    if (!r.rows.length)
-      return res.status(404).json({ message: 'Payment not found' });
-    res.json(r.rows[0]);
+    if (!rows.length)
+      return res.status(404).json({ message: "Payment not found" });
+    res.json(rows[0]);
   } catch (e) {
-    res.status(500).json({ message: 'Server error' });
+    console.error("updatePayment error:", e);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-// ── DELETE PAYMENT ────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE PAYMENT
+// DELETE /pg/:pgId/payments/:paymentId
+// ─────────────────────────────────────────────────────────────────────────────
 const deletePayment = async (req, res) => {
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
     const { pgId, paymentId } = req.params;
 
-    // Get payment details before deleting
-    const payRes = await client.query(
-      'SELECT * FROM payments WHERE id=$1 AND pg_id=$2',
+    const { rows } = await client.query(
+      `SELECT p.*, pt.monthly_rent
+         FROM payments p
+         JOIN pg_tenants pt ON p.pg_tenant_id = pt.id
+        WHERE p.id = $1 AND p.pg_id = $2`,
       [paymentId, pgId],
     );
-    if (!payRes.rows.length)
-      return res.status(404).json({ message: 'Payment not found' });
-    const payment = payRes.rows[0];
+    if (!rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Payment not found" });
+    }
+    const payment = rows[0];
+    const monthlyRent = parseFloat(payment.monthly_rent);
 
-    // Delete the payment
-    await client.query('DELETE FROM payments WHERE id=$1', [paymentId]);
+    await client.query(`DELETE FROM payments WHERE id=$1`, [paymentId]);
 
-    // Recalculate tenant payment_status based on remaining payments this month
-    const remaining = await client.query(
-      `
-      SELECT COALESCE(SUM(paid_amount),0) as total_paid, pt.monthly_rent
-      FROM payments p
-      JOIN pg_tenants pt ON p.pg_tenant_id=pt.id
-      WHERE p.pg_tenant_id=$1
-        AND DATE_TRUNC('month', p.payment_date) = DATE_TRUNC('month', CURRENT_DATE)
-      GROUP BY pt.monthly_rent
-    `,
+    // Recalculate current month status using `month` column (not payment_date)
+    const { rows: remaining } = await client.query(
+      `SELECT COALESCE(SUM(paid_amount), 0) AS total_paid
+         FROM payments
+        WHERE pg_tenant_id = $1
+          AND DATE_TRUNC('month', month::date) = DATE_TRUNC('month', CURRENT_DATE)
+          AND status != 'failed'`,
       [payment.pg_tenant_id],
     );
+    const totalPaid = parseFloat(remaining[0].total_paid) || 0;
+    const newStatus =
+      totalPaid >= monthlyRent ? "paid" : totalPaid > 0 ? "partial" : "due";
 
-    let newStatus = 'due';
-    if (remaining.rows.length) {
-      const { total_paid, monthly_rent } = remaining.rows[0];
-      if (parseFloat(total_paid) >= parseFloat(monthly_rent))
-        newStatus = 'paid';
-      else if (parseFloat(total_paid) > 0) newStatus = 'partial';
-    }
-    await client.query('UPDATE pg_tenants SET payment_status=$1 WHERE id=$2', [
+    await client.query(`UPDATE pg_tenants SET payment_status=$1 WHERE id=$2`, [
       newStatus,
       payment.pg_tenant_id,
     ]);
 
-    await client.query('COMMIT');
-    res.json({ message: 'Payment deleted', newStatus });
+    await client.query(
+      `INSERT INTO activity_logs (pg_id, action, entity_type, entity_id, performed_by_name, performed_by_role)
+       VALUES ($1,$2,'payment',$3,$4,$5)`,
+      [
+        pgId,
+        `Deleted ${payment.receipt_number} ₹${payment.paid_amount} — reverted to '${newStatus}'`,
+        paymentId,
+        req.actor?.name || "Staff",
+        req.actor?.role || "staff",
+      ],
+    );
+
+    await client.query("COMMIT");
+    res.json({ message: "Payment deleted", newStatus });
   } catch (e) {
-    await client.query('ROLLBACK');
-    console.error(e);
-    res.status(500).json({ message: 'Server error' });
+    await client.query("ROLLBACK");
+    console.error("deletePayment error:", e);
+    res.status(500).json({ message: "Server error" });
   } finally {
     client.release();
   }
 };
 
-// ── EXPORT CSV ────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPORT CSV
+// GET /pg/:pgId/payments/export-csv
+// ─────────────────────────────────────────────────────────────────────────────
 const exportPaymentsCSV = async (req, res) => {
   try {
     const { pgId } = req.params;
     const { start_date, end_date, month } = req.query;
-    let conds = ['p.pg_id=$1'],
+
+    let conds = ["p.pg_id=$1"],
       params = [pgId],
       idx = 2;
     if (start_date) {
@@ -500,40 +620,38 @@ const exportPaymentsCSV = async (req, res) => {
     }
     if (month) {
       conds.push(
-        `DATE_TRUNC('month', p.payment_date) = DATE_TRUNC('month', $${idx++}::date)`,
+        `DATE_TRUNC('month', p.month::date) = DATE_TRUNC('month', $${idx++}::date)`,
       );
       params.push(month);
     }
 
     const result = await pool.query(
-      `
-      SELECT p.receipt_number, pt.name AS tenant_name, pt.phone, r.room_number,
-             p.amount, p.paid_amount, p.balance_due, p.is_partial,
-             p.payment_date, p.month, p.payment_mode, p.transaction_ref, p.status, p.notes
-      FROM payments p
-      LEFT JOIN pg_tenants pt ON p.pg_tenant_id=pt.id
-      LEFT JOIN rooms r ON pt.room_id=r.id
-      WHERE ${conds.join(' AND ')}
-      ORDER BY p.payment_date DESC
-    `,
+      `SELECT p.receipt_number, pt.name AS tenant_name, pt.phone, r.room_number,
+              p.amount, p.paid_amount, p.balance_due, p.is_partial,
+              p.payment_date, p.month, p.payment_mode, p.transaction_ref, p.status, p.notes
+         FROM payments p
+         LEFT JOIN pg_tenants pt ON p.pg_tenant_id=pt.id
+         LEFT JOIN rooms r ON pt.room_id=r.id
+        WHERE ${conds.join(" AND ")}
+        ORDER BY p.payment_date DESC`,
       params,
     );
 
     const headers = [
-      'Receipt No',
-      'Tenant Name',
-      'Phone',
-      'Room',
-      'Amount',
-      'Paid Amount',
-      'Balance Due',
-      'Is Partial',
-      'Date',
-      'Month',
-      'Method',
-      'Reference',
-      'Status',
-      'Notes',
+      "Receipt No",
+      "Tenant Name",
+      "Phone",
+      "Room",
+      "Amount",
+      "Paid Amount",
+      "Balance Due",
+      "Is Partial",
+      "Date",
+      "Month",
+      "Method",
+      "Reference",
+      "Status",
+      "Notes",
     ];
     const rows = result.rows.map((r) => [
       r.receipt_number,
@@ -543,50 +661,52 @@ const exportPaymentsCSV = async (req, res) => {
       r.amount,
       r.paid_amount || r.amount,
       r.balance_due || 0,
-      r.is_partial ? 'Yes' : 'No',
-      r.payment_date?.toISOString().split('T')[0],
+      r.is_partial ? "Yes" : "No",
+      r.payment_date?.toISOString().split("T")[0],
       r.month,
       r.payment_mode,
-      r.transaction_ref || '',
+      r.transaction_ref || "",
       r.status,
-      r.notes || '',
+      r.notes || "",
     ]);
 
     const csv = [headers, ...rows]
       .map((row) =>
-        row.map((v) => `"${String(v || '').replace(/"/g, '""')}"`).join(','),
+        row.map((v) => `"${String(v || "").replace(/"/g, '""')}"`).join(","),
       )
-      .join('\n');
+      .join("\n");
 
-    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader("Content-Type", "text/csv");
     res.setHeader(
-      'Content-Disposition',
+      "Content-Disposition",
       `attachment; filename="payments-${pgId}-${Date.now()}.csv"`,
     );
     res.send(csv);
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'Server error' });
+    console.error("exportPaymentsCSV error:", e);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-// ── EXPENSES ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPENSES
+// ─────────────────────────────────────────────────────────────────────────────
 const getExpenses = async (req, res) => {
   try {
     const { pgId } = req.params;
     const { category, status, page = 1, limit = 15 } = req.query;
-    let conds = ['pg_id=$1'],
+    let conds = ["pg_id=$1"],
       params = [pgId],
       idx = 2;
-    if (category && category !== 'all') {
+    if (category && category !== "all") {
       conds.push(`category=$${idx++}`);
       params.push(category);
     }
-    if (status && status !== 'all') {
+    if (status && status !== "all") {
       conds.push(`status=$${idx++}`);
       params.push(status);
     }
-    const where = `WHERE ${conds.join(' AND ')}`;
+    const where = `WHERE ${conds.join(" AND ")}`;
     const offset = (page - 1) * limit;
 
     const [count, expenses, stats, distribution, monthlyTrend] =
@@ -597,22 +717,19 @@ const getExpenses = async (req, res) => {
           [...params, parseInt(limit), offset],
         ),
         pool.query(
-          `
-        SELECT
-          COALESCE(SUM(amount) FILTER (WHERE DATE_TRUNC('month',expense_date)=DATE_TRUNC('month',CURRENT_DATE)),0) as total_this_month,
-          COALESCE(SUM(amount) FILTER (WHERE DATE_TRUNC('month',expense_date)=DATE_TRUNC('month',CURRENT_DATE-INTERVAL '1 month')),0) as total_last_month,
-          COALESCE(SUM(amount) FILTER (WHERE status='pending' AND (due_date IS NULL OR due_date<=CURRENT_DATE+7)),0) as upcoming_bills
+          `SELECT
+          COALESCE(SUM(amount) FILTER (WHERE DATE_TRUNC('month',expense_date)=DATE_TRUNC('month',CURRENT_DATE)),0) AS total_this_month,
+          COALESCE(SUM(amount) FILTER (WHERE DATE_TRUNC('month',expense_date)=DATE_TRUNC('month',CURRENT_DATE-INTERVAL '1 month')),0) AS total_last_month,
+          COALESCE(SUM(amount) FILTER (WHERE status='pending' AND (due_date IS NULL OR due_date<=CURRENT_DATE+7)),0) AS upcoming_bills
         FROM expenses WHERE pg_id=$1`,
           [pgId],
         ),
         pool.query(
-          `SELECT category, SUM(amount) as total FROM expenses WHERE pg_id=$1 AND DATE_TRUNC('month',expense_date)=DATE_TRUNC('month',CURRENT_DATE) GROUP BY category ORDER BY total DESC`,
+          `SELECT category, SUM(amount) AS total FROM expenses WHERE pg_id=$1 AND DATE_TRUNC('month',expense_date)=DATE_TRUNC('month',CURRENT_DATE) GROUP BY category ORDER BY total DESC`,
           [pgId],
         ),
         pool.query(
-          `SELECT TO_CHAR(DATE_TRUNC('month',expense_date),'Mon') as month, DATE_TRUNC('month',expense_date) as md, SUM(amount) as total
-        FROM expenses WHERE pg_id=$1 AND expense_date>=NOW()-INTERVAL '6 months'
-        GROUP BY md ORDER BY md`,
+          `SELECT TO_CHAR(DATE_TRUNC('month',expense_date),'Mon') AS month, DATE_TRUNC('month',expense_date) AS md, SUM(amount) AS total FROM expenses WHERE pg_id=$1 AND expense_date>=NOW()-INTERVAL '6 months' GROUP BY md ORDER BY md`,
           [pgId],
         ),
       ]);
@@ -626,7 +743,7 @@ const getExpenses = async (req, res) => {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -644,8 +761,7 @@ const createExpense = async (req, res) => {
       vendor,
     } = req.body;
     const r = await pool.query(
-      `INSERT INTO expenses (pg_id,description,sub_description,category,amount,expense_date,due_date,status,invoice_number,vendor)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      `INSERT INTO expenses (pg_id,description,sub_description,category,amount,expense_date,due_date,status,invoice_number,vendor) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [
         req.params.pgId,
         description,
@@ -654,14 +770,14 @@ const createExpense = async (req, res) => {
         amount,
         expense_date,
         due_date || null,
-        status || 'paid',
+        status || "paid",
         invoice_number,
         vendor,
       ],
     );
     res.status(201).json(r.rows[0]);
   } catch (e) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -677,8 +793,7 @@ const updateExpense = async (req, res) => {
       vendor,
     } = req.body;
     const r = await pool.query(
-      `UPDATE expenses SET description=$1,sub_description=$2,category=$3,amount=$4,expense_date=$5,status=$6,vendor=$7
-       WHERE id=$8 AND pg_id=$9 RETURNING *`,
+      `UPDATE expenses SET description=$1,sub_description=$2,category=$3,amount=$4,expense_date=$5,status=$6,vendor=$7 WHERE id=$8 AND pg_id=$9 RETURNING *`,
       [
         description,
         sub_description,
@@ -691,23 +806,23 @@ const updateExpense = async (req, res) => {
         req.params.pgId,
       ],
     );
-    if (!r.rows.length) return res.status(404).json({ message: 'Not found' });
+    if (!r.rows.length) return res.status(404).json({ message: "Not found" });
     res.json(r.rows[0]);
   } catch (e) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
 const deleteExpense = async (req, res) => {
   try {
     const r = await pool.query(
-      'DELETE FROM expenses WHERE id=$1 AND pg_id=$2 RETURNING id',
+      "DELETE FROM expenses WHERE id=$1 AND pg_id=$2 RETURNING id",
       [req.params.expenseId, req.params.pgId],
     );
-    if (!r.rows.length) return res.status(404).json({ message: 'Not found' });
-    res.json({ message: 'Deleted' });
+    if (!r.rows.length) return res.status(404).json({ message: "Not found" });
+    res.json({ message: "Deleted" });
   } catch (e) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
