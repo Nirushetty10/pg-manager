@@ -22,6 +22,8 @@ import RoomsPage from "./pages/owner/RoomsPage";
 import PaymentsPage from "./pages/owner/PaymentsPage";
 import ExpensesPage from "./pages/owner/ExpensesPage";
 import AdminPage from "./pages/owner/AdminPage";
+import ListingsPage from "./pages/listing/ListingsPage";
+import PGDetailPage from "./pages/listing/PGDetailPage";
 
 const Loader = () => (
   <Box
@@ -103,6 +105,8 @@ export default function App() {
               <Route path="expenses" element={<ExpensesPage />} />
               <Route path="admin" element={<AdminPage />} />
             </Route>
+            <Route path="/listings" element={<ListingsPage />} />
+            <Route path="/listings/:pgId" element={<PGDetailPage />} />
             <Route path="/" element={<RootRedirect />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

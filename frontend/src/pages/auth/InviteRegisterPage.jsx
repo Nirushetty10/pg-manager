@@ -271,7 +271,7 @@ export default function InviteRegisterPage() {
                 {/* Password */}
                 <TextField
                   fullWidth
-                  label="Password *"
+                  label="Password"
                   size="small"
                   type={showPass ? "text" : "password"}
                   value={password}
@@ -300,7 +300,7 @@ export default function InviteRegisterPage() {
                 {/* Confirm Password */}
                 <TextField
                   fullWidth
-                  label="Confirm Password *"
+                  label="Confirm Password"
                   size="small"
                   type={showConfirm ? "text" : "password"}
                   value={confirm}

@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
 const {
   auth,
@@ -6,37 +6,38 @@ const {
   requireOwner,
   requirePGAccess,
   requirePermission,
-} = require('../middleware/auth');
-const { upload, handleMulterError } = require('../middleware/upload');
+} = require("../middleware/auth");
+const { upload, handleMulterError } = require("../middleware/upload");
 
-const authCtrl = require('../controllers/authController');
-const masterCtrl = require('../controllers/masterController');
-const pgCtrl = require('../controllers/pgController');
-const tenantCtrl = require('../controllers/tenantController');
-const roomCtrl = require('../controllers/roomController');
-const finCtrl = require('../controllers/financeController');
+const authCtrl = require("../controllers/authController");
+const masterCtrl = require("../controllers/masterController");
+const pgCtrl = require("../controllers/pgController");
+const tenantCtrl = require("../controllers/tenantController");
+const roomCtrl = require("../controllers/roomController");
+const finCtrl = require("../controllers/financeController");
+const listingCtrl = require("../controllers/listingController");
 
 // ── AUTH ──────────────────────────────────────────────────────
-router.post('/auth/login', authCtrl.login);
-router.get('/auth/me', auth, authCtrl.getMe);
+router.post("/auth/login", authCtrl.login);
+router.get("/auth/me", auth, authCtrl.getMe);
 router.post(
-  '/auth/invite/owner',
+  "/auth/invite/owner",
   auth,
   requireMasterAdmin,
   authCtrl.inviteOwner,
 );
-router.get('/auth/invite/:token', authCtrl.validateInvite);
-router.post('/auth/register/owner', authCtrl.registerOwner);
+router.get("/auth/invite/:token", authCtrl.validateInvite);
+router.post("/auth/register/owner", authCtrl.registerOwner);
 
 // ── TENANT INVITE (public - no login) ──────────────────────────
 // Validate a tenant invite token (public)
-router.get('/tenant-invite/:token', authCtrl.validateInvite);
+router.get("/tenant-invite/:token", authCtrl.validateInvite);
 // Submit tenant self-registration from invite link (public)
 router.post(
-  '/tenant-invite/submit',
+  "/tenant-invite/submit",
   upload.fields([
-    { name: 'profile_photo', maxCount: 1 },
-    { name: 'id_proof', maxCount: 1 },
+    { name: "profile_photo", maxCount: 1 },
+    { name: "id_proof", maxCount: 1 },
   ]),
   handleMulterError,
   tenantCtrl.submitTenantInvite,
@@ -44,322 +45,327 @@ router.post(
 
 // ── MASTER ADMIN ──────────────────────────────────────────────
 router.get(
-  '/master/dashboard',
+  "/master/dashboard",
   auth,
   requireMasterAdmin,
   masterCtrl.getMasterDashboard,
 );
-router.get('/master/owners', auth, requireMasterAdmin, masterCtrl.getOwners);
+router.get("/master/owners", auth, requireMasterAdmin, masterCtrl.getOwners);
 router.get(
-  '/master/owners/:id',
+  "/master/owners/:id",
   auth,
   requireMasterAdmin,
   masterCtrl.getOwnerById,
 );
 router.patch(
-  '/master/owners/:id/toggle',
+  "/master/owners/:id/toggle",
   auth,
   requireMasterAdmin,
   masterCtrl.toggleOwnerStatus,
 );
 router.get(
-  '/master/pgs/:pgId',
+  "/master/pgs/:pgId",
   auth,
   requireMasterAdmin,
   masterCtrl.getPGDetails,
 );
 
 // ── OWNER ─────────────────────────────────────────────────────
-router.get('/owner/pgs', auth, requireOwner, pgCtrl.getOwnerPGs);
-router.post('/owner/pgs', auth, requireOwner, pgCtrl.createPG);
+router.get("/owner/pgs", auth, requireOwner, pgCtrl.getOwnerPGs);
+router.post("/owner/pgs", auth, requireOwner, pgCtrl.createPG);
+
+// ── PUBLIC LISTING ROUTES ─────────────────────────────────────
+router.get("/listings", listingCtrl.getListings);
+router.get("/listings/:pgId", listingCtrl.getListingById);
+router.get("/listings/:pgId/recommended", listingCtrl.getRecommendations);
 
 // ── PG-SCOPED ROUTES ──────────────────────────────────────────
 const pg = express.Router({ mergeParams: true });
 
 const pgUpload = upload.fields([
-  { name: 'logo', maxCount: 1 },
-  { name: 'pg_images', maxCount: 10 },
+  { name: "logo", maxCount: 1 },
+  { name: "pg_images", maxCount: 10 },
 ]);
 
-pg.get('/', auth, requirePGAccess, pgCtrl.getPG);
+pg.get("/", auth, requirePGAccess, pgCtrl.getPG);
 pg.put(
-  '/',
+  "/",
   auth,
   requirePGAccess,
-  requirePermission('system_settings'),
+  requirePermission("system_settings"),
   pgUpload,
   handleMulterError,
   pgCtrl.updatePG,
 );
 pg.delete(
-  '/images',
+  "/images",
   auth,
   requirePGAccess,
-  requirePermission('system_settings'),
+  requirePermission("system_settings"),
   pgCtrl.removePGImage,
 );
-pg.get('/dashboard', auth, requirePGAccess, pgCtrl.getPGDashboard);
+pg.get("/dashboard", auth, requirePGAccess, pgCtrl.getPGDashboard);
 pg.get(
-  '/reports',
+  "/reports",
   auth,
   requirePGAccess,
-  requirePermission('view_reports'),
+  requirePermission("view_reports"),
   pgCtrl.getReports,
 );
-pg.get('/logs', auth, requirePGAccess, pgCtrl.getLogs);
+pg.get("/logs", auth, requirePGAccess, pgCtrl.getLogs);
 
 // Staff
 pg.get(
-  '/staff',
+  "/staff",
   auth,
   requirePGAccess,
-  requirePermission('manage_staff'),
+  requirePermission("manage_staff"),
   pgCtrl.getStaff,
 );
 pg.post(
-  '/staff',
+  "/staff",
   auth,
   requirePGAccess,
-  requirePermission('manage_staff'),
+  requirePermission("manage_staff"),
   pgCtrl.createStaff,
 );
 pg.put(
-  '/staff/:staffId',
+  "/staff/:staffId",
   auth,
   requirePGAccess,
-  requirePermission('manage_staff'),
+  requirePermission("manage_staff"),
   pgCtrl.updateStaff,
 );
 pg.put(
-  '/staff/:staffId/reset-password',
+  "/staff/:staffId/reset-password",
   auth,
   requirePGAccess,
-  requirePermission('manage_staff'),
+  requirePermission("manage_staff"),
   pgCtrl.resetStaffPassword,
 );
 
 // Permissions
-pg.get('/permissions', auth, requirePGAccess, pgCtrl.getPermissions);
+pg.get("/permissions", auth, requirePGAccess, pgCtrl.getPermissions);
 pg.put(
-  '/permissions',
+  "/permissions",
   auth,
   requirePGAccess,
-  requirePermission('system_settings'),
+  requirePermission("system_settings"),
   pgCtrl.updatePermissions,
 );
 
 // Tenants
 const tenantUpload = upload.fields([
-  { name: 'profile_photo', maxCount: 1 },
-  { name: 'id_proof', maxCount: 1 },
+  { name: "profile_photo", maxCount: 1 },
+  { name: "id_proof", maxCount: 1 },
 ]);
 pg.get(
-  '/tenants',
+  "/tenants/qr-code",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
+  tenantCtrl.getQRCode,
+);
+pg.get(
+  "/tenants",
+  auth,
+  requirePGAccess,
+  requirePermission("manage_tenants"),
   tenantCtrl.getTenants,
 );
 pg.get(
-  '/tenants/:tenantId',
+  "/tenants/:tenantId",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
   tenantCtrl.getTenantById,
 );
 pg.post(
-  '/tenants',
+  "/tenants",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
   tenantUpload,
   handleMulterError,
   tenantCtrl.createTenant,
 );
 pg.put(
-  '/tenants/:tenantId',
+  "/tenants/:tenantId",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
   tenantUpload,
   handleMulterError,
   tenantCtrl.updateTenant,
 );
 pg.patch(
-  '/tenants/:tenantId/assign',
+  "/tenants/:tenantId/assign",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
   tenantCtrl.assignRoom,
 );
 pg.patch(
-  '/tenants/:tenantId/rent',
+  "/tenants/:tenantId/rent",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
   tenantCtrl.updateRentDetails,
 );
 pg.patch(
-  '/tenants/:tenantId/vacate',
+  "/tenants/:tenantId/vacate",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
   tenantCtrl.markVacated,
 );
 pg.delete(
-  '/tenants/:tenantId',
+  "/tenants/:tenantId",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
   tenantCtrl.deleteTenant,
 );
 pg.post(
-  '/tenants/invite',
+  "/tenants/invite",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
   tenantCtrl.inviteTenant,
-);
-pg.get(
-  '/tenants/qr-code',
-  auth,
-  requirePGAccess,
-  requirePermission('manage_tenants'),
-  tenantCtrl.getQRCode,
 );
 
 // Rooms (no maintenance)
 pg.get(
-  '/rooms',
+  "/rooms",
   auth,
   requirePGAccess,
-  requirePermission('manage_rooms'),
+  requirePermission("manage_rooms"),
   roomCtrl.getRooms,
 );
 pg.get(
-  '/rooms/:roomId',
+  "/rooms/:roomId",
   auth,
   requirePGAccess,
-  requirePermission('manage_rooms'),
+  requirePermission("manage_rooms"),
   roomCtrl.getRoomById,
 );
 pg.post(
-  '/rooms',
+  "/rooms",
   auth,
   requirePGAccess,
-  requirePermission('manage_rooms'),
+  requirePermission("manage_rooms"),
   roomCtrl.createRoom,
 );
 pg.put(
-  '/rooms/:roomId',
+  "/rooms/:roomId",
   auth,
   requirePGAccess,
-  requirePermission('manage_rooms'),
+  requirePermission("manage_rooms"),
   roomCtrl.updateRoom,
 );
 pg.delete(
-  '/rooms/:roomId',
+  "/rooms/:roomId",
   auth,
   requirePGAccess,
-  requirePermission('manage_rooms'),
+  requirePermission("manage_rooms"),
   roomCtrl.deleteRoom,
 );
 pg.post(
-  '/rooms/assign-bed',
+  "/rooms/assign-bed",
   auth,
   requirePGAccess,
-  requirePermission('manage_rooms'),
+  requirePermission("manage_rooms"),
   roomCtrl.assignBed,
 );
 pg.post(
-  '/rooms/unassign-bed',
+  "/rooms/unassign-bed",
   auth,
   requirePGAccess,
-  requirePermission('manage_rooms'),
+  requirePermission("manage_rooms"),
   roomCtrl.unassignBed,
 );
 
 // Payments
 pg.get(
-  '/payments',
+  "/payments",
   auth,
   requirePGAccess,
-  requirePermission('record_payments'),
+  requirePermission("record_payments"),
   finCtrl.getPayments,
 );
 pg.get(
-  '/payments/ledger',
+  "/payments/ledger",
   auth,
   requirePGAccess,
-  requirePermission('record_payments'),
+  requirePermission("record_payments"),
   finCtrl.getPgLedger,
 );
 pg.get(
-  '/payments/export-csv',
+  "/payments/export-csv",
   auth,
   requirePGAccess,
-  requirePermission('record_payments'),
+  requirePermission("record_payments"),
   finCtrl.exportPaymentsCSV,
 );
 pg.post(
-  '/payments',
+  "/payments",
   auth,
   requirePGAccess,
-  requirePermission('record_payments'),
+  requirePermission("record_payments"),
   finCtrl.createPayment,
 );
 pg.put(
-  '/payments/:paymentId',
+  "/payments/:paymentId",
   auth,
   requirePGAccess,
-  requirePermission('record_payments'),
+  requirePermission("record_payments"),
   finCtrl.updatePayment,
 );
 pg.delete(
-  '/payments/:paymentId',
+  "/payments/:paymentId",
   auth,
   requirePGAccess,
-  requirePermission('record_payments'),
+  requirePermission("record_payments"),
   finCtrl.deletePayment,
 );
 pg.get(
-  '/tenants/:tenantId/ledger',
+  "/tenants/:tenantId/ledger",
   auth,
   requirePGAccess,
-  requirePermission('manage_tenants'),
+  requirePermission("manage_tenants"),
   finCtrl.getTenantLedger,
 );
 
 // Expenses
 pg.get(
-  '/expenses',
+  "/expenses",
   auth,
   requirePGAccess,
-  requirePermission('manage_expenses'),
+  requirePermission("manage_expenses"),
   finCtrl.getExpenses,
 );
 pg.post(
-  '/expenses',
+  "/expenses",
   auth,
   requirePGAccess,
-  requirePermission('manage_expenses'),
+  requirePermission("manage_expenses"),
   finCtrl.createExpense,
 );
 pg.put(
-  '/expenses/:expenseId',
+  "/expenses/:expenseId",
   auth,
   requirePGAccess,
-  requirePermission('manage_expenses'),
+  requirePermission("manage_expenses"),
   finCtrl.updateExpense,
 );
 pg.delete(
-  '/expenses/:expenseId',
+  "/expenses/:expenseId",
   auth,
   requirePGAccess,
-  requirePermission('manage_expenses'),
+  requirePermission("manage_expenses"),
   finCtrl.deleteExpense,
 );
 
-router.use('/pg/:pgId', pg);
+router.use("/pg/:pgId", pg);
 
 module.exports = router;
