@@ -61,7 +61,7 @@ temp/
 # -----------------------------
 # Database files (IMPORTANT)
 # -----------------------------
-*.sql
+# NOTE: schema.sql must be committed (migrate.js needs it). Only ignore dumps/backups.
 *.dump
 *.backup
 

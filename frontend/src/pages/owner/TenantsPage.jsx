@@ -53,6 +53,11 @@ import {
   BadgeOutlined,
 } from "@mui/icons-material";
 import { pgAPI } from "../../services/api";
+import {
+  isProtectedFile,
+  openProtectedFile,
+  useProtectedImage,
+} from "../../services/secureFile";
 import StatusChip from "../../components/common/StatusChip";
 import { PageHeader } from "../../components/common";
 import { usePermissions } from "../../hooks/usePermissions";
@@ -245,9 +250,19 @@ const buildFD = (form) => {
   return fd;
 };
 
+// Image that loads a private (login-protected) file
+function ProtectedImg({ url, sx }) {
+  const src = useProtectedImage(url);
+  if (!src) return null;
+  return <Box component="img" src={src} sx={sx} />;
+}
+
 // ─── FileDropZone — defined at module level, never re-created ─────────────────
 function FileDropZone({ label, accept, value, onChange, icon, error }) {
   const ref = useRef();
+  const protectedSrc = useProtectedImage(
+    typeof value === "string" ? value : null,
+  );
   const isImg =
     value &&
     (typeof value === "string"
@@ -256,9 +271,11 @@ function FileDropZone({ label, accept, value, onChange, icon, error }) {
   const src =
     value &&
     (typeof value === "string"
-      ? value.startsWith("/")
-        ? `${API_BASE}${value}`
-        : value
+      ? isProtectedFile(value)
+        ? protectedSrc
+        : value.startsWith("/")
+          ? `${API_BASE}${value}`
+          : value
       : URL.createObjectURL(value));
 
   return (
@@ -1917,9 +1934,8 @@ export default function TenantsPage() {
                         {tenantDetail.id_proof.match(
                           /\.(jpg|jpeg|png|webp)/i,
                         ) ? (
-                          <Box
-                            component="img"
-                            src={`${API_BASE}${tenantDetail.id_proof}`}
+                          <ProtectedImg
+                            url={tenantDetail.id_proof}
                             sx={{
                               width: "100%",
                               maxHeight: 100,
@@ -1932,8 +1948,7 @@ export default function TenantsPage() {
                           <Button
                             size="small"
                             variant="outlined"
-                            href={`${API_BASE}${tenantDetail.id_proof}`}
-                            target="_blank"
+                            onClick={() => openProtectedFile(tenantDetail.id_proof)}
                             sx={{ borderRadius: 2, fontSize: "0.78rem" }}
                           >
                             View Document

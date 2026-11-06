@@ -93,11 +93,13 @@ const getListings = async (req, res) => {
       WITH pg_stats AS (
         SELECT
           p.id,
-          COUNT(b.id) FILTER (WHERE b.status = 'available') AS vacant_beds,
-          COUNT(b.id)                                        AS total_beds,
-          MIN(r.monthly_rent)                                AS min_rent,
-          MAX(r.monthly_rent)                                AS max_rent,
-          COUNT(pt.id) FILTER (WHERE pt.status = 'active')  AS active_tenants
+          -- DISTINCT is required: rooms x beds x tenants are joined in one
+          -- GROUP BY, which otherwise multiplies every count.
+          COUNT(DISTINCT b.id) FILTER (WHERE b.status = 'available') AS vacant_beds,
+          COUNT(DISTINCT b.id)                                        AS total_beds,
+          MIN(r.monthly_rent)                                         AS min_rent,
+          MAX(r.monthly_rent)                                         AS max_rent,
+          COUNT(DISTINCT pt.id) FILTER (WHERE pt.status = 'active')  AS active_tenants
         FROM pgs p
         LEFT JOIN rooms r ON r.pg_id = p.id
         LEFT JOIN beds b ON b.pg_id = p.id
@@ -254,7 +256,8 @@ const getListingById = async (req, res) => {
     const { pgId } = req.params;
 
     const pgRes = await pool.query(`
-      SELECT p.*,
+      SELECT p.id, p.name, p.city, p.address, p.phone, p.email, p.logo_url, p.images,
+             p.description, p.pg_type, p.amenities_list, p.rules, p.nearby, p.lat, p.lng, p.created_at,
         COUNT(DISTINCT b.id) FILTER (WHERE b.status='available') AS vacant_beds,
         COUNT(DISTINCT b.id)                                      AS total_beds,
         COUNT(DISTINCT pt.id) FILTER (WHERE pt.status='active')  AS active_tenants
@@ -278,7 +281,7 @@ const getListingById = async (req, res) => {
     const rooms = await pool.query(`
       SELECT r.id, r.room_number, r.floor, r.room_type,
              r.monthly_rent, r.amenities, r.total_beds,
-             COUNT(b.id) FILTER (WHERE b.status='available') AS vacant_beds,
+             COUNT(DISTINCT b.id) FILTER (WHERE b.status='available') AS vacant_beds,
              COUNT(b.id)                                      AS total_beds_actual
       FROM rooms r
       LEFT JOIN beds b ON b.room_id = r.id
@@ -313,9 +316,10 @@ const getRecommendations = async (req, res) => {
 
     // Get reference PG
     const refRes = await pool.query(`
-      SELECT p.*,
+      SELECT p.id, p.name, p.city, p.address, p.phone, p.email, p.logo_url, p.images,
+             p.description, p.pg_type, p.amenities_list, p.rules, p.nearby, p.lat, p.lng, p.created_at,
         MIN(r.monthly_rent) AS min_rent,
-        COUNT(b.id) FILTER (WHERE b.status='available') AS vacant_beds
+        COUNT(DISTINCT b.id) FILTER (WHERE b.status='available') AS vacant_beds
       FROM pgs p
       LEFT JOIN rooms r ON r.pg_id = p.id
       LEFT JOIN beds b ON b.pg_id = p.id
@@ -328,15 +332,16 @@ const getRecommendations = async (req, res) => {
 
     // Get all other active PGs with vacancy
     const candidates = await pool.query(`
-      SELECT p.*,
+      SELECT p.id, p.name, p.city, p.address, p.phone, p.email, p.logo_url, p.images,
+             p.description, p.pg_type, p.amenities_list, p.rules, p.nearby, p.lat, p.lng, p.created_at,
         MIN(r.monthly_rent) AS min_rent,
-        COUNT(b.id) FILTER (WHERE b.status='available') AS vacant_beds
+        COUNT(DISTINCT b.id) FILTER (WHERE b.status='available') AS vacant_beds
       FROM pgs p
       LEFT JOIN rooms r ON r.pg_id = p.id
       LEFT JOIN beds b ON b.pg_id = p.id
       WHERE p.id != $1 AND p.is_active = TRUE
       GROUP BY p.id
-      HAVING COUNT(b.id) FILTER (WHERE b.status='available') > 0
+      HAVING COUNT(DISTINCT b.id) FILTER (WHERE b.status='available') > 0
     `, [pgId]);
 
     // Score and sort

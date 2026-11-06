@@ -64,14 +64,17 @@ const createRoom = async (req, res) => {
     await client.query('BEGIN');
     const { pgId } = req.params;
     const { room_number, floor, room_type, amenities, monthly_rent, total_beds, notes } = req.body;
-    if (!room_number || !monthly_rent) return res.status(400).json({ message: 'Room number and rent required' });
+    if (!room_number || !String(room_number).trim() || !monthly_rent) return res.status(400).json({ message: 'Room number and rent required' });
+    if (!(Number(monthly_rent) > 0)) return res.status(400).json({ message: 'Rent must be greater than 0' });
+    const bedCount = total_beds === undefined || total_beds === '' ? 1 : Number(total_beds);
+    if (!Number.isInteger(bedCount) || bedCount < 1 || bedCount > 4) return res.status(400).json({ message: 'Beds must be between 1 and 4' });
 
     const room = await client.query(`
       INSERT INTO rooms (pg_id,room_number,floor,room_type,amenities,monthly_rent,total_beds,notes,status)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'available') RETURNING *
-    `, [pgId, room_number, floor||1, room_type||'single', amenities||[], monthly_rent, total_beds||1, notes]);
+    `, [pgId, String(room_number).trim(), floor||1, room_type||'single', amenities||[], monthly_rent, bedCount, notes]);
 
-    for (const label of ['A','B','C','D'].slice(0, total_beds||1)) {
+    for (const label of ['A','B','C','D'].slice(0, bedCount)) {
       await client.query('INSERT INTO beds (room_id,pg_id,bed_label,status) VALUES ($1,$2,$3,$4)', [room.rows[0].id, pgId, label, 'available']);
     }
     await client.query('COMMIT');
@@ -80,7 +83,7 @@ const createRoom = async (req, res) => {
     await client.query('ROLLBACK');
     if (e.code==='23505') return res.status(400).json({ message: 'Room number already exists' });
     res.status(500).json({ message: 'Server error' });
-  } finally { client.release(); }
+  } finally { await client.query("ROLLBACK").catch(() => {}); client.release(); }
 };
 
 const updateRoom = async (req, res) => {
@@ -136,7 +139,7 @@ const assignBed = async (req, res) => {
     await client.query('COMMIT');
     res.json({ message: 'Bed assigned' });
   } catch (e) { await client.query('ROLLBACK'); console.error(e); res.status(500).json({ message: 'Server error' }); }
-  finally { client.release(); }
+  finally { await client.query("ROLLBACK").catch(() => {}); client.release(); }
 };
 
 // ── UNASSIGN BED (make tenant pending) ────────────────────────
@@ -161,7 +164,7 @@ const unassignBed = async (req, res) => {
     await client.query('COMMIT');
     res.json({ message: 'Tenant unassigned from bed' });
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ message: 'Server error' }); }
-  finally { client.release(); }
+  finally { await client.query("ROLLBACK").catch(() => {}); client.release(); }
 };
 
 module.exports = { getRooms, getRoomById, createRoom, updateRoom, deleteRoom, assignBed, unassignBed };

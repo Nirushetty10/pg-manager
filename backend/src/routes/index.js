@@ -8,6 +8,7 @@ const {
   requirePermission,
 } = require("../middleware/auth");
 const { upload, handleMulterError } = require("../middleware/upload");
+const rateLimit = require("express-rate-limit");
 
 const authCtrl = require("../controllers/authController");
 const masterCtrl = require("../controllers/masterController");
@@ -16,9 +17,30 @@ const tenantCtrl = require("../controllers/tenantController");
 const roomCtrl = require("../controllers/roomController");
 const finCtrl = require("../controllers/financeController");
 const listingCtrl = require("../controllers/listingController");
+const fileCtrl = require("../controllers/fileController");
+
+// ── Rate limiters ─────────────────────────────────────────────
+const tooMany = (message) => ({ message });
+// Brute-force protection on login: 10 attempts / 15 min / IP
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: tooMany("Too many login attempts. Please try again in 15 minutes."),
+});
+// Public endpoints that accept tokens / uploads
+const publicLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: tooMany("Too many requests. Please try again later."),
+});
 
 // ── AUTH ──────────────────────────────────────────────────────
-router.post("/auth/login", authCtrl.login);
+router.post("/auth/login", loginLimiter, authCtrl.login);
 router.get("/auth/me", auth, authCtrl.getMe);
 router.post(
   "/auth/invite/owner",
@@ -26,15 +48,16 @@ router.post(
   requireMasterAdmin,
   authCtrl.inviteOwner,
 );
-router.get("/auth/invite/:token", authCtrl.validateInvite);
-router.post("/auth/register/owner", authCtrl.registerOwner);
+router.get("/auth/invite/:token", publicLimiter, authCtrl.validateInvite);
+router.post("/auth/register/owner", publicLimiter, authCtrl.registerOwner);
 
 // ── TENANT INVITE (public - no login) ──────────────────────────
 // Validate a tenant invite token (public)
-router.get("/tenant-invite/:token", authCtrl.validateInvite);
+router.get("/tenant-invite/:token", publicLimiter, authCtrl.validateInvite);
 // Submit tenant self-registration from invite link (public)
 router.post(
   "/tenant-invite/submit",
+  publicLimiter,
   upload.fields([
     { name: "profile_photo", maxCount: 1 },
     { name: "id_proof", maxCount: 1 },
@@ -74,6 +97,9 @@ router.get(
 router.get("/owner/pgs", auth, requireOwner, pgCtrl.getOwnerPGs);
 router.post("/owner/pgs", auth, requireOwner, pgCtrl.createPG);
 
+// ── PROTECTED FILES (ID proofs) ───────────────────────────────
+router.get("/files/id-proofs/:filename", auth, fileCtrl.serveIdProof);
+
 // ── PUBLIC LISTING ROUTES ─────────────────────────────────────
 router.get("/listings", listingCtrl.getListings);
 router.get("/listings/:pgId", listingCtrl.getListingById);
@@ -104,7 +130,13 @@ pg.delete(
   requirePermission("system_settings"),
   pgCtrl.removePGImage,
 );
-pg.get("/dashboard", auth, requirePGAccess, pgCtrl.getPGDashboard);
+pg.get(
+  "/dashboard",
+  auth,
+  requirePGAccess,
+  requirePermission("view_dashboard"),
+  pgCtrl.getPGDashboard,
+);
 pg.get(
   "/reports",
   auth,
@@ -112,7 +144,7 @@ pg.get(
   requirePermission("view_reports"),
   pgCtrl.getReports,
 );
-pg.get("/logs", auth, requirePGAccess, pgCtrl.getLogs);
+pg.get("/logs", auth, requirePGAccess, requireOwner, pgCtrl.getLogs);
 
 // Staff
 pg.get(

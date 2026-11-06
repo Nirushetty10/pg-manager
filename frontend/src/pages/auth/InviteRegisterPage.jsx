@@ -77,8 +77,8 @@ export default function InviteRegisterPage() {
     e.preventDefault();
     setSubmitError("");
 
-    if (password.length < 6)
-      return setSubmitError("Password must be at least 6 characters");
+    if (password.length < 8)
+      return setSubmitError("Password must be at least 8 characters");
     if (password !== confirm) return setSubmitError("Passwords do not match");
 
     setSaving(true);
@@ -278,7 +278,7 @@ export default function InviteRegisterPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   sx={{ mb: 2 }}
                   required
-                  helperText="Minimum 6 characters"
+                  helperText="Minimum 8 characters"
                   InputProps={{
                     endAdornment: (
                       <InputAdornment position="end">

@@ -471,6 +471,7 @@ const createPayment = async (req, res) => {
     console.error("createPayment error:", e);
     res.status(500).json({ message: "Server error" });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };
@@ -594,6 +595,7 @@ const deletePayment = async (req, res) => {
     console.error("deletePayment error:", e);
     res.status(500).json({ message: "Server error" });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };
@@ -747,8 +749,30 @@ const getExpenses = async (req, res) => {
   }
 };
 
+function validateExpense(b, res) {
+  const amt = Number(b.amount);
+  if (!b.description || !String(b.description).trim()) {
+    res.status(400).json({ message: "Description is required" });
+    return false;
+  }
+  if (!b.category) {
+    res.status(400).json({ message: "Category is required" });
+    return false;
+  }
+  if (b.amount === undefined || b.amount === "" || !isFinite(amt) || amt <= 0) {
+    res.status(400).json({ message: "Amount must be a positive number" });
+    return false;
+  }
+  if (!b.expense_date || isNaN(Date.parse(b.expense_date))) {
+    res.status(400).json({ message: "A valid expense date is required" });
+    return false;
+  }
+  return true;
+}
+
 const createExpense = async (req, res) => {
   try {
+    if (!validateExpense(req.body, res)) return;
     const {
       description,
       sub_description,
@@ -783,6 +807,7 @@ const createExpense = async (req, res) => {
 
 const updateExpense = async (req, res) => {
   try {
+    if (!validateExpense(req.body, res)) return;
     const {
       description,
       sub_description,

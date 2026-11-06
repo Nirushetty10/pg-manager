@@ -3,6 +3,9 @@
 set -e
 
 DOMAIN="your-domain.com"
+# REQUIRED: export these before running the script
+: "${MASTER_ADMIN_EMAIL:?Set MASTER_ADMIN_EMAIL}"
+: "${MASTER_ADMIN_PASSWORD:?Set MASTER_ADMIN_PASSWORD (min 10 chars)}"
 APP_DIR="/var/www/pg-manager"
 DB_NAME="pg_manager"
 DB_USER="pgmanager"
@@ -52,14 +55,17 @@ DB_PASSWORD=$DB_PASS
 JWT_SECRET=$(openssl rand -hex 32)
 JWT_EXPIRES_IN=7d
 FRONTEND_URL=https://$DOMAIN
+MASTER_ADMIN_EMAIL=$MASTER_ADMIN_EMAIL
+MASTER_ADMIN_PASSWORD=$MASTER_ADMIN_PASSWORD
 ENV
 
 # 8. Frontend .env
 echo "VITE_API_URL=/api" > $APP_DIR/frontend/.env.production
 
 # 9. Install + Build
-cd $APP_DIR/backend && npm install --production
-node src/config/migrate.js
+cd $APP_DIR/backend && npm install --omit=dev
+NODE_ENV=production node src/config/migrate.js
+chmod 600 $APP_DIR/backend/.env
 
 cd $APP_DIR/frontend && npm install && npm run build
 
@@ -88,8 +94,8 @@ echo "  URL:           https://$DOMAIN"
 echo "  DB Name:        $DB_NAME"
 echo "  DB Password:    $DB_PASS  ← SAVE THIS"
 echo ""
-echo "  Master Admin:   admin@pgplatform.com / admin123"
-echo "  Owner Login:    ravi@grandpg.com / owner123"
+echo "  Master Admin:   $MASTER_ADMIN_EMAIL  (password you provided)"
+echo "  Remove MASTER_ADMIN_PASSWORD from backend/.env after first login"
 echo ""
 echo "  pm2 status           — app health"
 echo "  pm2 logs pg-manager-api  — live logs"

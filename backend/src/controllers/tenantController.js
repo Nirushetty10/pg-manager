@@ -3,6 +3,9 @@ const crypto = require("crypto");
 const { getFileUrl } = require("../middleware/upload");
 
 // ── LIST TENANTS ──────────────────────────────────────────────
+const PHONE_RE = /^[6-9]\d{9}$/;
+const cleanPhone = (v) => String(v || "").replace(/\s/g, "");
+
 const getTenants = async (req, res) => {
   try {
     const { pgId } = req.params;
@@ -123,6 +126,12 @@ const createTenant = async (req, res) => {
 
     if (!name || !phone)
       return res.status(400).json({ message: "Name and phone are required" });
+    if (!PHONE_RE.test(cleanPhone(phone))) {
+      await client.query("ROLLBACK");
+      return res
+        .status(400)
+        .json({ message: "Enter a valid 10-digit Indian mobile number" });
+    }
 
     const profile_photo = req.files?.profile_photo?.[0]
       ? getFileUrl(req, req.files.profile_photo[0])
@@ -136,8 +145,10 @@ const createTenant = async (req, res) => {
         "SELECT status FROM beds WHERE id=$1 AND pg_id=$2",
         [bed_id, pgId],
       );
-      if (bedCheck.rows[0]?.status === "occupied")
+      if (bedCheck.rows[0]?.status === "occupied") {
+        await client.query("ROLLBACK");
         return res.status(400).json({ message: "Bed already occupied" });
+      }
     }
 
     // Upsert global profile
@@ -280,6 +291,7 @@ const createTenant = async (req, res) => {
     console.error(err);
     res.status(500).json({ message: "Server error" });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };
@@ -384,6 +396,7 @@ const updateTenant = async (req, res) => {
     console.error(err);
     res.status(500).json({ message: "Server error" });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };
@@ -413,10 +426,24 @@ const assignRoom = async (req, res) => {
     }
 
     const old = await client.query(
-      "SELECT room_id, bed_id FROM pg_tenants WHERE id=$1",
-      [tenantId],
+      "SELECT room_id, bed_id FROM pg_tenants WHERE id=$1 AND pg_id=$2",
+      [tenantId, pgId],
     );
-    const { room_id: oldRoom, bed_id: oldBed } = old.rows[0] || {};
+    if (!old.rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Tenant not found" });
+    }
+    if (room_id) {
+      const roomCheck = await client.query(
+        "SELECT id FROM rooms WHERE id=$1 AND pg_id=$2",
+        [room_id, pgId],
+      );
+      if (!roomCheck.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Room not found" });
+      }
+    }
+    const { room_id: oldRoom, bed_id: oldBed } = old.rows[0];
     if (oldBed)
       await client.query("UPDATE beds SET status='available' WHERE id=$1", [
         oldBed,
@@ -467,6 +494,7 @@ const assignRoom = async (req, res) => {
     console.error(err);
     res.status(500).json({ message: "Server error" });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };
@@ -494,11 +522,17 @@ const markVacated = async (req, res) => {
     const { pgId, tenantId } = req.params;
     const { vacated_date } = req.body;
 
+    // SECURITY FIX: look the tenant up inside THIS pg only. Previously the
+    // bed/room of a tenant from another PG could be freed.
     const t = await client.query(
-      "SELECT room_id, bed_id FROM pg_tenants WHERE id=$1",
-      [tenantId],
+      "SELECT room_id, bed_id FROM pg_tenants WHERE id=$1 AND pg_id=$2",
+      [tenantId, pgId],
     );
-    const { room_id, bed_id } = t.rows[0] || {};
+    if (!t.rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Tenant not found" });
+    }
+    const { room_id, bed_id } = t.rows[0];
 
     await client.query(
       "UPDATE pg_tenants SET status='vacated', vacated_date=$1, room_id=NULL, bed_id=NULL WHERE id=$2 AND pg_id=$3",
@@ -540,6 +574,7 @@ const markVacated = async (req, res) => {
     console.error(err);
     res.status(500).json({ message: "Server error" });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };
@@ -554,10 +589,13 @@ const deleteTenant = async (req, res) => {
       "SELECT room_id, bed_id FROM pg_tenants WHERE id=$1 AND pg_id=$2",
       [tenantId, pgId],
     );
-    if (!t.rows.length) return res.status(404).json({ message: "Not found" });
+    if (!t.rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Not found" });
+    }
     const { room_id, bed_id } = t.rows[0];
 
-    await client.query("DELETE FROM pg_tenants WHERE id=$1", [tenantId]);
+    await client.query("DELETE FROM pg_tenants WHERE id=$1 AND pg_id=$2", [tenantId, pgId]);
     if (bed_id)
       await client.query("UPDATE beds SET status='available' WHERE id=$1", [
         bed_id,
@@ -578,6 +616,7 @@ const deleteTenant = async (req, res) => {
     await client.query("ROLLBACK");
     res.status(500).json({ message: "Server error" });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };
@@ -627,16 +666,30 @@ const getQRCode = async (req, res) => {
     if (!pg.rows.length)
       return res.status(404).json({ message: "PG not found" });
 
-    const token = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-    await pool.query(
-      `
-      INSERT INTO invites (type, pg_id, token, name, expires_at)
-      VALUES ('tenant',$1,$2,'QR Invite',$3)
-    `,
-      [pgId, token, expiresAt],
+    // Reuse the current QR token if it still has > 7 days left, so a QR code
+    // that was already printed keeps working.
+    const existing = await pool.query(
+      `SELECT token, expires_at FROM invites
+       WHERE type='tenant' AND pg_id=$1 AND name='QR Invite' AND phone IS NULL
+         AND is_used=FALSE AND expires_at > NOW() + INTERVAL '7 days'
+       ORDER BY expires_at DESC LIMIT 1`,
+      [pgId],
     );
+    let token, expiresAt;
+    if (existing.rows.length) {
+      token = existing.rows[0].token;
+      expiresAt = existing.rows[0].expires_at;
+    } else {
+      token = crypto.randomBytes(32).toString("hex");
+      expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      await pool.query(
+        `
+        INSERT INTO invites (type, pg_id, token, name, expires_at)
+        VALUES ('tenant',$1,$2,'QR Invite',$3)
+      `,
+        [pgId, token, expiresAt],
+      );
+    }
 
     const inviteLink = `${process.env.FRONTEND_URL || "http://localhost:5173"}/invite/tenant?token=${token}`;
     res.json({
@@ -683,6 +736,13 @@ const submitTenantInvite = async (req, res) => {
       return res
         .status(400)
         .json({ message: "Invalid or expired invite link" });
+
+    if (!name || !String(name).trim() || String(name).trim().length < 2)
+      return res.status(400).json({ message: "Full name is required" });
+    if (!PHONE_RE.test(cleanPhone(phone)))
+      return res
+        .status(400)
+        .json({ message: "Enter a valid 10-digit Indian mobile number" });
 
     const pgId = invite.rows[0].pg_id;
     const profile_photo = req.files?.profile_photo?.[0]
@@ -827,9 +887,14 @@ const submitTenantInvite = async (req, res) => {
       tenantId = t.rows[0].id;
     }
 
-    await client.query("UPDATE invites SET is_used=TRUE WHERE token=$1", [
-      token,
-    ]);
+    // Personal invites (sent to a specific phone) are single-use.
+    // PG-wide QR invites (no phone) must stay valid so every new tenant can
+    // register with the same printed QR code until it expires.
+    if (invite.rows[0].phone) {
+      await client.query("UPDATE invites SET is_used=TRUE WHERE token=$1", [
+        token,
+      ]);
+    }
     await client.query("COMMIT");
     res.json({
       message:
@@ -845,6 +910,7 @@ const submitTenantInvite = async (req, res) => {
     console.error(err);
     res.status(500).json({ message: "Server error" });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };

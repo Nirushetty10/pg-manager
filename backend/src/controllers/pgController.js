@@ -34,7 +34,7 @@ const createPG = async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json(pg.rows[0]);
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ message: 'Server error' }); }
-  finally { client.release(); }
+  finally { await client.query("ROLLBACK").catch(() => {}); client.release(); }
 };
 
 const updatePG = async (req, res) => {
@@ -134,9 +134,18 @@ const getStaff = async (req, res) => {
   } catch (e) { res.status(500).json({ message: 'Server error' }); }
 };
 
+const STAFF_ROLES = ['manager', 'staff'];
 const createStaff = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
+    if (!name?.trim() || !email?.trim() || !password)
+      return res.status(400).json({ message: 'Name, email and password are required' });
+    if (!/^\S+@\S+\.\S+$/.test(email))
+      return res.status(400).json({ message: 'Enter a valid email address' });
+    if (String(password).length < 8)
+      return res.status(400).json({ message: 'Password must be at least 8 characters' });
+    if (role && !STAFF_ROLES.includes(role))
+      return res.status(400).json({ message: 'Role must be manager or staff' });
     const hash = await bcrypt.hash(password, 12);
     const r = await pool.query('INSERT INTO pg_staff (pg_id,name,email,password,role) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,email,role,is_active,created_at',
       [req.params.pgId, name, email, hash, role||'staff']);
@@ -150,16 +159,24 @@ const createStaff = async (req, res) => {
 const updateStaff = async (req, res) => {
   try {
     const { name, role, is_active } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: 'Name is required' });
+    if (!STAFF_ROLES.includes(role))
+      return res.status(400).json({ message: 'Role must be manager or staff' });
     const r = await pool.query('UPDATE pg_staff SET name=$1,role=$2,is_active=$3 WHERE id=$4 AND pg_id=$5 RETURNING id,name,email,role,is_active',
-      [name, role, is_active, req.params.staffId, req.params.pgId]);
+      [name, role, is_active !== false, req.params.staffId, req.params.pgId]);
+    if (!r.rows.length) return res.status(404).json({ message: 'Staff not found' });
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ message: 'Server error' }); }
 };
 
 const resetStaffPassword = async (req, res) => {
   try {
-    const hash = await bcrypt.hash(req.body.new_password, 12);
-    await pool.query('UPDATE pg_staff SET password=$1 WHERE id=$2 AND pg_id=$3', [hash, req.params.staffId, req.params.pgId]);
+    const { new_password } = req.body;
+    if (!new_password || String(new_password).length < 8)
+      return res.status(400).json({ message: 'Password must be at least 8 characters' });
+    const hash = await bcrypt.hash(new_password, 12);
+    const r = await pool.query('UPDATE pg_staff SET password=$1 WHERE id=$2 AND pg_id=$3 RETURNING id', [hash, req.params.staffId, req.params.pgId]);
+    if (!r.rows.length) return res.status(404).json({ message: 'Staff not found' });
     res.json({ message: 'Password reset' });
   } catch (e) { res.status(500).json({ message: 'Server error' }); }
 };
@@ -185,7 +202,7 @@ const updatePermissions = async (req, res) => {
     await client.query('COMMIT');
     res.json({ message: 'Permissions updated' });
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ message: 'Server error' }); }
-  finally { client.release(); }
+  finally { await client.query("ROLLBACK").catch(() => {}); client.release(); }
 };
 
 const getLogs = async (req, res) => {

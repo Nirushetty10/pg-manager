@@ -138,16 +138,36 @@ async function migrate() {
     // ── SEED DATA ────────────────────────────────────────────
     console.log("🌱 Seeding data...");
 
+    const isProd = process.env.NODE_ENV === "production";
+
     // Master Admin
-    const adminHash = await bcrypt.hash("admin123", 12);
+    // Production: credentials MUST come from env (MASTER_ADMIN_EMAIL /
+    // MASTER_ADMIN_PASSWORD) and no demo data is created.
+    // Development: demo credentials are used.
+    const adminEmail = isProd
+      ? process.env.MASTER_ADMIN_EMAIL
+      : "admin@pgplatform.com";
+    const adminPassword = isProd ? process.env.MASTER_ADMIN_PASSWORD : "admin123";
+    if (isProd && (!adminEmail || !adminPassword || adminPassword.length < 10))
+      throw new Error(
+        "In production set MASTER_ADMIN_EMAIL and MASTER_ADMIN_PASSWORD (min 10 chars) before running migrate",
+      );
+    const adminHash = await bcrypt.hash(adminPassword, 12);
     await client.query(
       `
       INSERT INTO master_admins (name, email, password)
-      VALUES ('Master Admin', 'admin@pgplatform.com', $1)
+      VALUES ('Master Admin', $2, $1)
       ON CONFLICT (email) DO NOTHING
     `,
-      [adminHash],
+      [adminHash, adminEmail],
     );
+
+    if (isProd) {
+      await client.query("COMMIT");
+      console.log("✅ Production migration complete (no demo data seeded)");
+      console.log(`   Master Admin : ${adminEmail}`);
+      return;
+    }
 
     // Owner
     const ownerHash = await bcrypt.hash("owner123", 12);

@@ -4,7 +4,9 @@ const crypto = require("crypto");
 const pool = require("../config/db");
 
 const signToken = (payload) =>
-  jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "7d" });
+  jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
+  });
 
 // ── LOGIN ─────────────────────────────────────────────────────
 const login = async (req, res) => {
@@ -25,7 +27,7 @@ const login = async (req, res) => {
       const admin = adminRes.rows[0];
       if (!(await bcrypt.compare(password, admin.password)))
         return res.status(400).json({ message: "Invalid credentials" });
-      const token = signToken({ id: admin.id, role: "master_admin" });
+      const token = signToken({ id: admin.id, role: "master_admin", name: admin.name });
       return res.json({
         token,
         user: {
@@ -58,6 +60,7 @@ const login = async (req, res) => {
         id: owner.id,
         role: "owner",
         ownerId: owner.id,
+        name: owner.name,
       });
       return res.json({
         token,
@@ -90,6 +93,7 @@ const login = async (req, res) => {
         role: staff.role,
         pgId: staff.pg_id,
         ownerId: staff.owner_id,
+        name: staff.name,
       });
       return res.json({
         token,
@@ -289,10 +293,10 @@ const registerOwner = async (req, res) => {
 
     const { token, password } = req.body;
     if (!token) return res.status(400).json({ message: "Token is required" });
-    if (!password || password.length < 6)
+    if (!password || password.length < 8)
       return res
         .status(400)
-        .json({ message: "Password must be at least 6 characters" });
+        .json({ message: "Password must be at least 8 characters" });
 
     // ── Find the owner by invite_token (most reliable source)
     const ownerRes = await client.query(
@@ -345,6 +349,7 @@ const registerOwner = async (req, res) => {
     console.error("registerOwner error:", err);
     res.status(500).json({ message: "Server error. Please try again." });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };
@@ -355,10 +360,10 @@ const registerTenant = async (req, res) => {
   try {
     const { token, password } = req.body;
 
-    if (!password || password.length < 6) {
+    if (!password || password.length < 8) {
       await client.query("ROLLBACK");
       return res.status(400).json({
-        message: "Password must be at least 6 characters",
+        message: "Password must be at least 8 characters",
       });
     }
 
@@ -430,6 +435,7 @@ const registerTenant = async (req, res) => {
     console.error(err);
     res.status(500).json({ message: "Server error" });
   } finally {
+    await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
     client.release();
   }
 };

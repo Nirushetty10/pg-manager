@@ -125,8 +125,8 @@ function StaffTab({ pgId }) {
     try { await api.updateStaff(s.id, { name:s.name, role:s.role, is_active:!s.is_active }); fetch(); } catch(e) {}
   };
   const handleReset = async () => {
-    if (!newPass||newPass.length<6) return;
-    try { await api.resetStaffPassword(resetId, { new_password:newPass }); setResetOpen(false); } catch(e) {}
+    if (!newPass||newPass.length<8) return alert('Password must be at least 8 characters');
+    try { await api.resetStaffPassword(resetId, { new_password:newPass }); setResetOpen(false); setNewPass(''); } catch(e) { alert(e.response?.data?.message||'Failed to reset password'); }
   };
 
   const roleChip = (role) => {
@@ -217,7 +217,7 @@ function StaffTab({ pgId }) {
           <IconButton onClick={()=>setResetOpen(false)} size="small"><Close /></IconButton>
         </DialogTitle>
         <DialogContent>
-          <TextField fullWidth label="New Password" size="small" sx={{ mt:1 }} type={showPass?'text':'password'} value={newPass} onChange={e=>setNewPass(e.target.value)} helperText="Min 6 characters"
+          <TextField fullWidth label="New Password" size="small" sx={{ mt:1 }} type={showPass?'text':'password'} value={newPass} onChange={e=>setNewPass(e.target.value)} helperText="Min 8 characters"
             InputProps={{ endAdornment:<InputAdornment position="end"><IconButton size="small" onClick={()=>setShowPass(!showPass)}>{showPass?<VisibilityOff/>:<Visibility/>}</IconButton></InputAdornment> }} />
         </DialogContent>
         <DialogActions sx={{ px:3, pb:3, gap:1 }}>
