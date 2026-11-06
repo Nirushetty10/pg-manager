@@ -317,6 +317,13 @@ const updateTenant = async (req, res) => {
       id_type,
     } = req.body;
 
+    if (!name || !phone)
+      return res.status(400).json({ message: "Name and phone are required" });
+    if (!PHONE_RE.test(cleanPhone(phone)))
+      return res
+        .status(400)
+        .json({ message: "Enter a valid 10-digit Indian mobile number" });
+
     const profile_photo = req.files?.profile_photo?.[0]
       ? getFileUrl(req, req.files.profile_photo[0])
       : null;
@@ -614,6 +621,13 @@ const deleteTenant = async (req, res) => {
     res.json({ message: "Tenant removed" });
   } catch (err) {
     await client.query("ROLLBACK");
+    // payments.pg_tenant_id is ON DELETE RESTRICT: payment history is never
+    // deleted silently. Mark the tenant as vacated instead.
+    if (err.code === "23503")
+      return res.status(400).json({
+        message:
+          "This tenant has payment history and cannot be deleted. Mark the tenant as vacated instead.",
+      });
     res.status(500).json({ message: "Server error" });
   } finally {
     await client.query("ROLLBACK").catch(() => {}); // no-op if already committed
@@ -820,11 +834,21 @@ const submitTenantInvite = async (req, res) => {
 
     // Upsert pg_tenant
     const existTenant = await client.query(
-      "SELECT id FROM pg_tenants WHERE pg_id=$1 AND phone=$2",
+      "SELECT id, status FROM pg_tenants WHERE pg_id=$1 AND phone=$2",
       [pgId, phone],
     );
     let tenantId;
     if (existTenant.rows.length) {
+      // SECURITY / DATA FIX: this endpoint is public. Re-submitting a phone that
+      // is already pending or active in this PG used to overwrite that tenant's
+      // details and reset an ACTIVE tenant back to 'pending'. Only a tenant who
+      // has already vacated may register again.
+      if (existTenant.rows[0].status !== "vacated") {
+        await client.query("ROLLBACK");
+        return res
+          .status(400)
+          .json({ message: "You are already registered in this PG." });
+      }
       tenantId = existTenant.rows[0].id;
       await client.query(
         `
